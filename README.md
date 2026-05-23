@@ -12,6 +12,6 @@ MesloLG SとNoto Sans JP/SC/TC/KRの合成フォントです。
 Apache 2.0 ライセンスの元で自由に使用できます。
 
 ## Nercone Mono NF JP/SC/TC/KR
-MesloLG S Nerd FontとNoto Sans JP/SC/TC/KRの合成フォントです。
+Nercone Mono JP/SC/TC/KRにNerd Fontのパッチを適用したものです。
 
 Apache 2.0 ライセンスの元で自由に使用できます。
