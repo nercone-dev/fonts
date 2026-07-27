@@ -2,8 +2,10 @@
 build/
 dist/
 
-# Python
-__pycache__
+# Rust
+vendor/
+target/
+Cargo.lock
 
 # macOS
 .DS_Store
