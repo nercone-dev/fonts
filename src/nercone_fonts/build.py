@@ -67,7 +67,7 @@ class Builder:
 
         base = self.component(family.latin, slope, Weight.Regular, prefix="")
         upem = base.font["head"].unitsPerEm
-        base.prepare(self.axis, upem)
+        base.prepare(self.axis, upem, retain=True)
 
         advance = self.cell(base) if family.monospace else None
         if advance:
@@ -79,7 +79,7 @@ class Builder:
         for typeface in family.cjk:
             component = self.component(typeface, slope, Weight.Regular, typeface.prefix)
             component.codepoints -= claimed
-            component.prepare(self.axis, upem, 2 * advance / upem if advance else 1.0)
+            component.prepare(self.axis, upem)
             if advance:
                 component.monospace(advance)
             claimed |= component.codepoints
@@ -235,6 +235,11 @@ class Builder:
         if style.variable():
             return data
 
+        font = TTFont(io.BytesIO(data))
+        if "fvar" in font:
+            location = {entry.axisTag: entry.defaultValue for entry in font["fvar"].axes}
+            instancer.instantiateVariableFont(font, location, inplace=True, updateFontNames=False)
+
         buffer = io.BytesIO()
-        Outlines.compact(TTFont(io.BytesIO(data)), self.family, style, version).save(buffer)
+        Outlines.compact(font, self.family, style, version).save(buffer)
         return buffer.getvalue()

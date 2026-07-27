@@ -20,3 +20,8 @@ GitHub = "https://github.com/nercone-dev/fonts/"
 
 [project.scripts]
 nercone-fonts = "nercone_fonts.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5"
+]

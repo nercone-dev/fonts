@@ -9,6 +9,8 @@ from .design import Axis
 
 windows = (3, 1, 0x409)
 
+titles = {"wght": "Weight", "wdth": "Width", "opsz": "Optical Size", "ital": "Italic", "slnt": "Slant"}
+
 class Names:
     copyright = 0
     family = 1
@@ -61,14 +63,18 @@ class Names:
         table, fvar = font["name"], font["fvar"]
 
         for entry in fvar.axes:
-            entry.axisNameID = table.addName("Weight", minNameID=255)
+            entry.axisNameID = table.addName(titles.get(entry.axisTag, entry.axisTag), minNameID=255)
 
         fvar.instances = []
+        if not any(entry.axisTag == self.axis.tag for entry in fvar.axes):
+            return
+
         for weight in self.axis.weights():
             instance = NamedInstance()
             instance.subfamilyNameID = table.addName(weight.name + self.style.slope.suffix(), minNameID=255)
             instance.postscriptNameID = 0xFFFF
-            instance.coordinates = {self.axis.tag: float(weight.value)}
+            instance.coordinates = {entry.axisTag: entry.defaultValue for entry in fvar.axes}
+            instance.coordinates[self.axis.tag] = float(weight.value)
             fvar.instances.append(instance)
 
     def axes(self, font: TTFont):
@@ -83,10 +89,19 @@ class Names:
                 value["linkedValue"] = float(Weight.Bold.value)
             values.append(value)
 
-        buildStatTable(font, [
-            {"tag": "wght", "name": "Weight", "ordering": 0, "values": values},
-            {"tag": "ital", "name": "Italic", "ordering": 1, "values": [{"value": 1.0, "name": "Italic"} if italic else {"value": 0.0, "name": "Roman", "flags": 0x2, "linkedValue": 1.0}]}
-        ], elidedFallbackName="Regular", macNames=False)
+        entries = [
+            {"tag": "wght", "name": "Weight", "values": values},
+            {"tag": "ital", "name": "Italic", "values": [{"value": 1.0, "name": "Italic"} if italic else {"value": 0.0, "name": "Roman", "flags": 0x2, "linkedValue": 1.0}]}
+        ]
+
+        if "fvar" in font:
+            declared = {entry["tag"] for entry in entries}
+            entries += [{"tag": entry.axisTag, "name": titles.get(entry.axisTag, entry.axisTag)} for entry in font["fvar"].axes if entry.axisTag not in declared]
+
+        for ordering, entry in enumerate(entries):
+            entry["ordering"] = ordering
+
+        buildStatTable(font, entries, elidedFallbackName="Regular", macNames=False)
 
 class Notice:
     @staticmethod

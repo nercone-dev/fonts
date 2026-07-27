@@ -10,7 +10,7 @@ from .prepare import Component
 epsilon = 1e-6
 
 class Metrics:
-    def __init__(self, upem: int, ascender: int, descender: int, gap: int, line_ascender: int, line_descender: int, line_gap: int, window_ascent: int, window_descent: int, cap_height: int, x_height: int, italic_angle: float, underline_position: int, underline_thickness: int):
+    def __init__(self, upem: int, ascender: int, descender: int, gap: int, line_ascender: int, line_descender: int, line_gap: int, window_ascent: int, window_descent: int, cap_height: int, x_height: int, italic_angle: float, underline_position: int, underline_thickness: int, typo_metrics: bool = False):
         self.upem = upem
         self.ascender = ascender
         self.descender = descender
@@ -20,6 +20,7 @@ class Metrics:
         self.line_gap = line_gap
         self.window_ascent = window_ascent
         self.window_descent = window_descent
+        self.typo_metrics = typo_metrics
         self.cap_height = cap_height
         self.x_height = x_height
         self.italic_angle = italic_angle
@@ -51,6 +52,7 @@ class Metrics:
             ascender=abs(os2.sTypoAscender), descender=-abs(os2.sTypoDescender), gap=abs(os2.sTypoLineGap),
             line_ascender=abs(hhea.ascender), line_descender=-abs(hhea.descender), line_gap=abs(hhea.lineGap),
             window_ascent=max(ascents), window_descent=max(descents),
+            typo_metrics=bool(os2.fsSelection & 0x0080),
             cap_height=getattr(os2, "sCapHeight", None) or round(upem * 0.70),
             x_height=getattr(os2, "sxHeight", None) or round(upem * 0.52),
             italic_angle=-abs(post.italicAngle) if italic else 0.0,
@@ -118,7 +120,7 @@ class Metrics:
         os2.yStrikeoutSize = max(1, round(self.upem * 0.05))
         os2.yStrikeoutPosition = round(self.x_height * 0.55)
 
-        os2.fsSelection = 0x0080  # USE_TYPO_METRICS
+        os2.fsSelection = 0x0080 if self.typo_metrics else 0  # USE_TYPO_METRICS
         if style.italic():
             os2.fsSelection |= 0x0001
         if style.bold():

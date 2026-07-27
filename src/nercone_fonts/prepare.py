@@ -39,9 +39,9 @@ class Component:
     def load(data: bytes, name: str, **kwargs) -> "Component":
         return Component(TTFont(io.BytesIO(data)), name, **kwargs)
 
-    def prepare(self, axis: Axis, upem: int, scale: float = 1.0) -> "Component":
+    def prepare(self, axis: Axis, upem: int, scale: float = 1.0, retain: bool = False) -> "Component":
         self.subset()
-        self.rebase(axis)
+        self.rebase(axis, retain)
         self.scale(upem, scale)
         self.rename()
         return self
@@ -76,18 +76,20 @@ class Component:
 
         self.codepoints = set(self.font.getBestCmap())
 
-    def rebase(self, axis: Axis):
+    def rebase(self, axis: Axis, retain: bool = False):
         if "fvar" not in self.font:
             return
 
         location = {}
         for entry in self.font["fvar"].axes:
             if entry.axisTag != axis.tag:
-                location[entry.axisTag] = entry.defaultValue
+                if not retain:
+                    location[entry.axisTag] = entry.defaultValue
                 continue
             location[entry.axisTag] = (max(entry.minValue, axis.minimum), min(max(entry.minValue, axis.default), entry.maxValue), min(entry.maxValue, axis.maximum))
 
-        instancer.instantiateVariableFont(self.font, location, inplace=True, updateFontNames=False, optimize=False)
+        if location:
+            instancer.instantiateVariableFont(self.font, location, inplace=True, updateFontNames=False, optimize=False)
 
     def scale(self, upem: int, factor: float = 1.0):
         current = self.font["head"].unitsPerEm
@@ -120,10 +122,24 @@ class Component:
 
     def monospace(self, advance: int):
         metrics = self.font["hmtx"].metrics
+        outlines = self.font["glyf"] if "glyf" in self.font else None
 
+        shifts = {}
         for name, (width, bearing) in list(metrics.items()):
             cells = max(1, int(round(width / advance))) if width else 1
-            metrics[name] = (cells * advance, bearing)
+            shift = (cells * advance - width) // 2 if width else 0
+            shifts[name] = shift
+            metrics[name] = (cells * advance, bearing + shift)
+
+        if outlines is not None:
+            for name, shift in shifts.items():
+                glyph = outlines[name]
+                if glyph.isComposite():
+                    for component in glyph.components:
+                        if hasattr(component, "x"):
+                            component.x += shift - shifts.get(component.glyphName, 0)
+                elif glyph.numberOfContours > 0 and shift:
+                    glyph.coordinates.translate((shift, 0))
 
         self.freeze()
 

@@ -1,3 +1,4 @@
+import itertools
 from functools import partial
 from typing import Optional, Iterable, List, Dict, Tuple
 
@@ -132,6 +133,11 @@ class Mapping:
     def settled(self) -> bool:
         return self.source is None or self.source.matches(self.space)
 
+    def axes(self) -> List[str]:
+        if "fvar" not in self.font:
+            return [Space.tag]
+        return [entry.axisTag for entry in self.font["fvar"].axes]
+
     def supports(self) -> Iterable[Tuple[float, float, float]]:
         if "gvar" in self.font:
             for variations in self.font["gvar"].variations.values():
@@ -139,11 +145,33 @@ class Mapping:
                     if Space.tag in variation.axes:
                         yield variation.axes[Space.tag]
 
+        tags = self.axes()
         for store in Mapping.stores(self.font):
             for region in store.VarRegionList.Region:
-                if len(region.VarRegionAxis) == 1:
-                    entry = region.VarRegionAxis[0]
-                    yield (entry.StartCoord, entry.PeakCoord, entry.EndCoord)
+                for tag, entry in zip(tags, region.VarRegionAxis):
+                    if tag == Space.tag and entry.PeakCoord:
+                        yield (entry.StartCoord, entry.PeakCoord, entry.EndCoord)
+
+    def levels(self) -> Dict[str, List[float]]:
+        found = {tag: {0.0} for tag in self.axes() if tag != Space.tag}
+        if not found:
+            return found
+
+        if "gvar" in self.font:
+            for variations in self.font["gvar"].variations.values():
+                for variation in variations:
+                    for tag, support in variation.axes.items():
+                        if tag in found:
+                            found[tag].update(support)
+
+        tags = self.axes()
+        for store in Mapping.stores(self.font):
+            for region in store.VarRegionList.Region:
+                for tag, entry in zip(tags, region.VarRegionAxis):
+                    if tag in found and entry.PeakCoord:
+                        found[tag].update((entry.StartCoord, entry.PeakCoord, entry.EndCoord))
+
+        return {tag: sorted(values) for tag, values in found.items()}
 
     def breakpoints(self) -> List[float]:
         if self.source is None:
@@ -161,9 +189,21 @@ class Mapping:
                 del self.font[tag]
 
         if self.source is not None and not self.settled():
-            locations = [{Space.tag: self.space.normalize(weight)} for weight in masters]
-            model = VariationModel([location if location[Space.tag] else {} for location in locations], axisOrder=[Space.tag])
-            coordinates = [self.coordinate(weight) for weight in masters]
+            levels = self.levels()
+            locations, coordinates = [], []
+            for chosen in itertools.product(*levels.values()):
+                extra = {tag: value for tag, value in zip(levels, chosen) if value}
+                for weight in masters:
+                    location = dict(extra)
+                    if self.space.normalize(weight):
+                        location[Space.tag] = self.space.normalize(weight)
+                    locations.append(location)
+
+                    coordinate = dict(extra)
+                    coordinate[Space.tag] = self.coordinate(weight)
+                    coordinates.append(coordinate)
+
+            model = VariationModel(locations, axisOrder=self.axes())
 
             if "gvar" in self.font:
                 self.outlines(model, coordinates)
@@ -171,7 +211,7 @@ class Mapping:
 
         self.declare()
 
-    def outlines(self, model: VariationModel, coordinates: List[float]):
+    def outlines(self, model: VariationModel, coordinates: List[Dict[str, float]]):
         glyf, gvar = self.font["glyf"], self.font["gvar"]
         horizontal = self.font["hmtx"].metrics
         vertical = self.font["vmtx"].metrics if "vmtx" in self.font else None
@@ -189,7 +229,7 @@ class Mapping:
             for coordinate in coordinates:
                 total = GlyphCoordinates(points)
                 for variation in variations:
-                    scalar = supportScalar({Space.tag: coordinate}, variation.axes)
+                    scalar = supportScalar(coordinate, variation.axes)
                     if scalar:
                         total += GlyphCoordinates(variation.coordinates) * scalar
                 samples.append(total)
@@ -206,7 +246,7 @@ class Mapping:
 
             gvar.variations[name] = rebuilt
 
-    def deltas(self, model: VariationModel, coordinates: List[float]):
+    def deltas(self, model: VariationModel, coordinates: List[Dict[str, float]]):
         if "GDEF" not in self.font:
             return
 
@@ -215,14 +255,14 @@ class Mapping:
         if store is None:
             return
 
-        builder = OnlineVarStoreBuilder([Space.tag])
+        builder = OnlineVarStoreBuilder(self.axes())
         builder.setModel(model)
 
         indices = {0xFFFFFFFF: 0xFFFFFFFF}
         for outer, data in enumerate(store.VarData):
-            supports = [Mapping.support(store.VarRegionList.Region[index]) for index in data.VarRegionIndex]
+            supports = [self.support(store.VarRegionList.Region[index]) for index in data.VarRegionIndex]
             for inner, item in enumerate(data.Item):
-                values = [sum(delta * supportScalar({Space.tag: coordinate}, support) for delta, support in zip(item, supports)) for coordinate in coordinates]
+                values = [sum(delta * supportScalar(coordinate, support) for delta, support in zip(item, supports)) for coordinate in coordinates]
                 indices[(outer << 16) | inner] = builder.storeMasters(values)[1]
 
         definitions.VarStore = builder.finish()
@@ -235,23 +275,28 @@ class Mapping:
             return
 
         axis = self.space.axis
-        self.font["fvar"].axes[:] = [entry for entry in self.font["fvar"].axes if entry.axisTag == Space.tag]
         for entry in self.font["fvar"].axes:
-            entry.minValue, entry.defaultValue, entry.maxValue = axis.minimum, axis.default, axis.maximum
+            if entry.axisTag == Space.tag:
+                entry.minValue, entry.defaultValue, entry.maxValue = axis.minimum, axis.default, axis.maximum
         self.font["fvar"].instances[:] = []
 
+        segments = dict(self.font["avar"].segments) if "avar" in self.font else {}
         table = self.space.avar()
-        if table is not None:
+        if table is None:
+            segments.pop(Space.tag, None)
+        else:
+            segments[Space.tag] = table.segments[Space.tag]
+
+        curved = any(any(abs(plain - mapped) > epsilon for plain, mapped in mapping.items()) for mapping in segments.values())
+        if curved:
+            table = newTable("avar")
+            table.segments = {entry.axisTag: segments.get(entry.axisTag) or dict(Space.identity) for entry in self.font["fvar"].axes}
             self.font["avar"] = table
         elif "avar" in self.font:
             del self.font["avar"]
 
-    @staticmethod
-    def support(region) -> Dict[str, Tuple[float, float, float]]:
-        entry = region.VarRegionAxis[0]
-        if not entry.PeakCoord:
-            return {}
-        return {Space.tag: (entry.StartCoord, entry.PeakCoord, entry.EndCoord)}
+    def support(self, region) -> Dict[str, Tuple[float, float, float]]:
+        return {tag: (entry.StartCoord, entry.PeakCoord, entry.EndCoord) for tag, entry in zip(self.axes(), region.VarRegionAxis) if entry.PeakCoord}
 
     @staticmethod
     def stores(font: TTFont) -> List[object]:

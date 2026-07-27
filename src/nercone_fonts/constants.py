@@ -1,6 +1,6 @@
 from .models import Weight, Slope, License, Source, Typeface, Family
 
-version = "2.0"
+version = "3.0"
 vendor = "Nercone"
 
 class Paths:

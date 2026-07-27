@@ -1,3 +1,4 @@
+import copy
 from typing import List
 
 from fontTools.ttLib import TTFont, newTable
@@ -98,6 +99,9 @@ class Merger:
         if "vmtx" not in self.font:
             self.vertical()
 
+        for tag in Merger.layout:
+            self.defaults(tag)
+
         for component in self.components():
             layoutPreMerge(component.font)
 
@@ -123,6 +127,25 @@ class Merger:
             metrics.metrics = {}
             self.font["vmtx"] = metrics
             return
+
+    def defaults(self, tag: str):
+        tables = [component.font[tag].table for component in self.components() if tag in component.font]
+        names = {record.ScriptTag for table in tables for record in table.ScriptList.ScriptRecord}
+
+        for table in tables:
+            records = {record.ScriptTag: record for record in table.ScriptList.ScriptRecord}
+            default = records.get("DFLT")
+            if default is None:
+                continue
+
+            for name in sorted(names - set(records)):
+                record = otTables.ScriptRecord()
+                record.ScriptTag = name
+                record.Script = copy.deepcopy(default.Script)
+                table.ScriptList.ScriptRecord.append(record)
+
+            table.ScriptList.ScriptRecord.sort(key=lambda record: record.ScriptTag)
+            table.ScriptList.ScriptCount = len(table.ScriptList.ScriptRecord)
 
     def append(self, addon: Component):
         names = addon.glyphs()
@@ -161,6 +184,22 @@ class Merger:
             return
 
         source = addon.font["GDEF"].table.VarStore
+
+        tags = [entry.axisTag for entry in self.font["fvar"].axes] if "fvar" in self.font else [Space.tag]
+        others = [entry.axisTag for entry in addon.font["fvar"].axes] if "fvar" in addon.font else [Space.tag]
+        if tags != others:
+            for region in source.VarRegionList.Region:
+                entries = dict(zip(others, region.VarRegionAxis))
+                rebuilt = []
+                for tag in tags:
+                    entry = entries.get(tag)
+                    if entry is None:
+                        entry = otTables.VarRegionAxis()
+                        entry.StartCoord, entry.PeakCoord, entry.EndCoord = 0.0, 0.0, 0.0
+                    rebuilt.append(entry)
+                region.VarRegionAxis = rebuilt
+            source.VarRegionList.RegionAxisCount = len(tags)
+
         target = getattr(self.font["GDEF"].table, "VarStore", None)
         if target is None:
             target = self.font["GDEF"].table.VarStore = store()
