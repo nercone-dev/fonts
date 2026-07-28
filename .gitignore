@@ -3,7 +3,6 @@ build/
 dist/
 
 # Rust
-vendor/
 target/
 Cargo.lock
 
