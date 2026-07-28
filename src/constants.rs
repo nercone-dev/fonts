@@ -9,10 +9,10 @@ pub struct Paths;
 
 #[allow(non_upper_case_globals)]
 impl Paths {
-    pub const build: &'static str    = "build";
-    pub const sources: &'static str  = "build/sources";
-    pub const files: &'static str    = "build/files";
-    pub const dist: &'static str     = "dist";
+    pub const build:    &'static str = "build";
+    pub const sources:  &'static str = "build/sources";
+    pub const files:    &'static str = "build/files";
+    pub const dist:     &'static str = "dist";
     pub const licenses: &'static str = "licenses";
 }
 
@@ -31,10 +31,10 @@ pub struct URLs;
 
 #[allow(non_upper_case_globals)]
 impl URLs {
-    pub const inter: &'static str      = "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip";
-    pub const meslo: &'static str      = "https://github.com/andreberg/Meslo-Font/raw/master/dist/v1.2.1/Meslo%20LG%20v1.2.1.zip";
-    pub const charter: &'static str    = "https://practicaltypography.com/fonts/Charter%20210112.zip";
-    pub const noto: &'static str       = "https://github.com/google/fonts/raw/main/ofl/{directory}/{name}%5Bwght%5D.ttf";
+    pub const inter:      &'static str = "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip";
+    pub const meslo:      &'static str = "https://github.com/andreberg/Meslo-Font/raw/master/dist/v1.2.1/Meslo%20LG%20v1.2.1.zip";
+    pub const charter:    &'static str = "https://practicaltypography.com/fonts/Charter%20210112.zip";
+    pub const noto:       &'static str = "https://github.com/google/fonts/raw/main/ofl/{directory}/{name}%5Bwght%5D.ttf";
     pub const nerd_fonts: &'static str = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/NerdFontsSymbolsOnly.zip";
 }
 
