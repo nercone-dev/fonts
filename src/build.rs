@@ -12,7 +12,7 @@ use write_fonts::types::{F2Dot14, GlyphId16, Tag};
 
 use crate::constants::{version, Paths};
 use crate::design::{Axis, Space};
-use crate::font::{tags, Font};
+use crate::font::{capacity, tags, Font};
 use crate::harfbuzz;
 use crate::merge::Merger;
 use crate::metrics::Metrics;
@@ -24,8 +24,6 @@ use crate::statics;
 
 #[allow(non_upper_case_globals)]
 pub const emphasis: f64 = 600.0;
-#[allow(non_upper_case_globals)]
-pub const limit: usize = 0xFFFF;
 
 pub struct Builder {
     pub family: Family,
@@ -217,12 +215,13 @@ impl Builder {
             addon.retarget(&space, &masters);
         }
 
+        let total = base.font.glyph_count() + addons.iter().map(|addon| addon.font.glyph_count() - 1).sum::<usize>();
+        if total > capacity {
+            panic!("{} needs {} glyphs, more than the {} a font can hold", self.family.name, total, capacity);
+        }
+
         let merger = Merger::new(base, addons, Space::new(Axis::new(space.axis.minimum, space.axis.default, space.axis.maximum), Some(space.segments.clone())), true);
         let mut font = merger.build();
-
-        if font.glyph_count() > limit {
-            panic!("{} needs {} glyphs, more than the {} a font can hold", self.family.name, font.glyph_count(), limit);
-        }
 
         if !substitutions.is_empty() {
             self.emphasise(&mut font, &space, &substitutions);

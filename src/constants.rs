@@ -1,7 +1,7 @@
 use crate::models::{Weight, Slope, License, Source, Typeface, Family};
 
 #[allow(non_upper_case_globals)]
-pub const version: &str = "3.0";
+pub const version: &str = "3.1";
 #[allow(non_upper_case_globals)]
 pub const vendor: &str = "Nercone";
 

@@ -7,6 +7,9 @@ use write_fonts::{dump_table, FontBuilder};
 use write_fonts::validate::Validate;
 use write_fonts::FontWrite;
 
+#[allow(non_upper_case_globals)]
+pub const capacity: usize = 0xFFFF;
+
 pub struct Font {
     pub tables: BTreeMap<Tag, Vec<u8>>,
 }
@@ -92,6 +95,10 @@ impl Font {
     }
 
     pub fn set_glyphs(&mut self, glyphs: &[Vec<u8>]) {
+        if glyphs.len() > capacity {
+            panic!("{} glyphs given, more than the {} a font can hold", glyphs.len(), capacity);
+        }
+
         let mut glyf = Vec::new();
         let mut offsets = Vec::with_capacity(glyphs.len() + 1);
         for glyph in glyphs {
@@ -189,91 +196,196 @@ impl Font {
     }
 }
 
-pub fn charmap(mapping: &BTreeMap<u32, u16>) -> Vec<u8> {
-    let plane: Vec<(u32, u16)> = mapping.iter().filter(|(code, _)| **code <= 0xFFFF).map(|(code, glyph)| (*code, *glyph)).collect();
-    let beyond = mapping.keys().any(|code| *code > 0xFFFF);
+pub struct Segment {
+    pub start: u16,
+    pub end: u16,
+    pub delta: u16,
+    pub mapping: Vec<u16>,
+}
 
-    let mut segments: Vec<(u16, u16, u16)> = Vec::new();
-    for (code, glyph) in &plane {
-        match segments.last_mut() {
-            Some((_, end, delta)) if (*end as u32) + 1 == *code && (*code as u16).wrapping_add(*delta) == *glyph => {
-                *end = *code as u16;
-            }
-            _ => {
-                let delta = (*glyph as i32 - *code as i32).rem_euclid(0x10000) as u16;
-                segments.push((*code as u16, *code as u16, delta));
-            }
+impl Segment {
+    pub fn new(start: u16, end: u16, delta: u16) -> Segment {
+        Segment { start, end, delta, mapping: Vec::new() }
+    }
+
+    pub fn direct(&self) -> bool {
+        self.mapping.is_empty()
+    }
+
+    pub fn count(&self) -> usize {
+        self.end as usize - self.start as usize + 1
+    }
+
+    pub fn length(&self) -> usize {
+        8 + self.mapping.len() * 2
+    }
+
+    pub fn absorbs(&self, other: &Segment) -> bool {
+        let added = other.end as usize - self.end as usize;
+        if self.direct() {
+            self.count() + added < 4
+        } else {
+            added < 4
         }
     }
-    if segments.last().map(|(_, end, _)| *end) != Some(0xFFFF) {
-        segments.push((0xFFFF, 0xFFFF, 1));
+
+    pub fn absorb(&mut self, other: &Segment, mapping: &BTreeMap<u32, u16>) {
+        if self.direct() {
+            self.mapping = (self.start..=self.end).map(|code| code.wrapping_add(self.delta)).collect();
+            self.delta = 0;
+        }
+        for code in self.end + 1..=other.end {
+            self.mapping.push(mapping.get(&(code as u32)).copied().unwrap_or(0));
+        }
+        self.end = other.end;
+    }
+
+    pub fn trim(&mut self, end: u16) {
+        self.end = end;
+        if !self.direct() {
+            self.mapping.truncate(self.count());
+        }
+    }
+}
+
+pub fn segments(mapping: &BTreeMap<u32, u16>) -> Vec<Segment> {
+    let mut direct: Vec<Segment> = Vec::new();
+    for (code, glyph) in mapping.iter().filter(|(code, _)| **code <= 0xFFFF).map(|(code, glyph)| (*code as u16, *glyph)) {
+        match direct.last_mut() {
+            Some(last) if (last.end as u32) + 1 == code as u32 && code.wrapping_add(last.delta) == glyph => last.end = code,
+            _ => direct.push(Segment::new(code, code, glyph.wrapping_sub(code))),
+        }
+    }
+
+    let mut packed: Vec<Segment> = Vec::new();
+    for segment in direct {
+        match packed.last_mut() {
+            Some(last) if last.absorbs(&segment) => last.absorb(&segment, mapping),
+            _ => packed.push(segment),
+        }
+    }
+    packed
+}
+
+pub fn fit(segments: &mut Vec<Segment>, budget: usize) -> Option<u16> {
+    let mut length = 24;
+    let mut kept = 0;
+    let mut dropped = None;
+
+    for segment in segments.iter_mut() {
+        if length + segment.length() <= budget {
+            length += segment.length();
+            kept += 1;
+            continue;
+        }
+
+        let room = budget.saturating_sub(length + 8) / 2;
+        if !segment.direct() && room > 0 {
+            segment.trim(segment.start + room as u16 - 1);
+            dropped = Some(segment.end + 1);
+            kept += 1;
+        } else {
+            dropped = Some(segment.start);
+        }
+        break;
+    }
+
+    segments.truncate(kept);
+    dropped
+}
+
+pub fn format4(segments: Vec<Segment>) -> Vec<u8> {
+    let mut segments = segments;
+    if segments.last().map(|segment| segment.end) != Some(0xFFFF) {
+        segments.push(Segment::new(0xFFFF, 0xFFFF, 1));
     }
 
     let count = segments.len();
-    let length = 16 + count * 8;
-    let format4 = if plane.is_empty() || length > 0xFFFF {
-        None
-    } else {
-        let mut data = Vec::with_capacity(length);
-        data.extend_from_slice(&4u16.to_be_bytes());
-        data.extend_from_slice(&(length as u16).to_be_bytes());
-        data.extend_from_slice(&0u16.to_be_bytes());
-        data.extend_from_slice(&((count * 2) as u16).to_be_bytes());
-        let power = (count as f64).log2().floor() as u32;
-        let search = 2u16.pow(power + 1);
-        data.extend_from_slice(&search.to_be_bytes());
-        data.extend_from_slice(&(power as u16).to_be_bytes());
-        data.extend_from_slice(&((count * 2) as u16 - search).to_be_bytes());
-        for (_, end, _) in &segments {
-            data.extend_from_slice(&end.to_be_bytes());
-        }
-        data.extend_from_slice(&0u16.to_be_bytes());
-        for (start, _, _) in &segments {
-            data.extend_from_slice(&start.to_be_bytes());
-        }
-        for (_, _, delta) in &segments {
-            data.extend_from_slice(&delta.to_be_bytes());
-        }
-        for _ in &segments {
-            data.extend_from_slice(&0u16.to_be_bytes());
-        }
-        Some(data)
-    };
+    let length = 16 + segments.iter().map(Segment::length).sum::<usize>();
+    if length > 0xFFFF {
+        panic!("a cmap format 4 subtable cannot state a length of {} bytes", length);
+    }
 
-    let format12 = if !beyond {
-        None
-    } else {
-        let mut groups: Vec<(u32, u32, u32)> = Vec::new();
-        for (code, glyph) in mapping {
-            match groups.last_mut() {
-                Some((start, end, first)) if *end + 1 == *code && *first + (*code - *start) == *glyph as u32 => {
-                    *end = *code;
-                }
-                _ => groups.push((*code, *code, *glyph as u32)),
+    let mut data = Vec::with_capacity(length);
+    data.extend_from_slice(&4u16.to_be_bytes());
+    data.extend_from_slice(&(length as u16).to_be_bytes());
+    data.extend_from_slice(&0u16.to_be_bytes());
+    data.extend_from_slice(&((count * 2) as u16).to_be_bytes());
+    let power = (count as f64).log2().floor() as u32;
+    let search = 2u16.pow(power + 1);
+    data.extend_from_slice(&search.to_be_bytes());
+    data.extend_from_slice(&(power as u16).to_be_bytes());
+    data.extend_from_slice(&((count * 2) as u16 - search).to_be_bytes());
+    for segment in &segments {
+        data.extend_from_slice(&segment.end.to_be_bytes());
+    }
+    data.extend_from_slice(&0u16.to_be_bytes());
+    for segment in &segments {
+        data.extend_from_slice(&segment.start.to_be_bytes());
+    }
+    for segment in &segments {
+        data.extend_from_slice(&segment.delta.to_be_bytes());
+    }
+    let mut offset = 0;
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.direct() {
+            data.extend_from_slice(&0u16.to_be_bytes());
+        } else {
+            data.extend_from_slice(&((2 * (count - index) + 2 * offset) as u16).to_be_bytes());
+            offset += segment.mapping.len();
+        }
+    }
+    for segment in &segments {
+        for glyph in &segment.mapping {
+            data.extend_from_slice(&glyph.to_be_bytes());
+        }
+    }
+    data
+}
+
+pub fn format12(mapping: &BTreeMap<u32, u16>) -> Vec<u8> {
+    let mut groups: Vec<(u32, u32, u32)> = Vec::new();
+    for (code, glyph) in mapping {
+        match groups.last_mut() {
+            Some((start, end, first)) if *end + 1 == *code && *first + (*code - *start) == *glyph as u32 => {
+                *end = *code;
             }
+            _ => groups.push((*code, *code, *glyph as u32)),
         }
-        let mut data = Vec::with_capacity(16 + groups.len() * 12);
-        data.extend_from_slice(&12u16.to_be_bytes());
-        data.extend_from_slice(&0u16.to_be_bytes());
-        data.extend_from_slice(&((16 + groups.len() * 12) as u32).to_be_bytes());
-        data.extend_from_slice(&0u32.to_be_bytes());
-        data.extend_from_slice(&(groups.len() as u32).to_be_bytes());
-        for (start, end, first) in &groups {
-            data.extend_from_slice(&start.to_be_bytes());
-            data.extend_from_slice(&end.to_be_bytes());
-            data.extend_from_slice(&first.to_be_bytes());
-        }
-        Some(data)
-    };
+    }
+
+    let mut data = Vec::with_capacity(16 + groups.len() * 12);
+    data.extend_from_slice(&12u16.to_be_bytes());
+    data.extend_from_slice(&0u16.to_be_bytes());
+    data.extend_from_slice(&((16 + groups.len() * 12) as u32).to_be_bytes());
+    data.extend_from_slice(&0u32.to_be_bytes());
+    data.extend_from_slice(&(groups.len() as u32).to_be_bytes());
+    for (start, end, first) in &groups {
+        data.extend_from_slice(&start.to_be_bytes());
+        data.extend_from_slice(&end.to_be_bytes());
+        data.extend_from_slice(&first.to_be_bytes());
+    }
+    data
+}
+
+pub fn charmap(mapping: &BTreeMap<u32, u16>) -> Vec<u8> {
+    let mut segments = segments(mapping);
+    let dropped = fit(&mut segments, 0xFFFF);
+    if let Some(code) = dropped {
+        eprintln!("cmap: the format 4 subtable holds the characters below U+{:04X} only; the rest are mapped by format 12 alone", code);
+    }
+
+    let plane = (!segments.is_empty()).then(|| format4(segments));
+    let beyond = (mapping.keys().any(|code| *code > 0xFFFF) || dropped.is_some()).then(|| format12(mapping));
 
     let mut records: Vec<(u16, u16, usize)> = Vec::new();
     let mut subtables: Vec<&[u8]> = Vec::new();
-    if let Some(data) = &format4 {
+    if let Some(data) = &plane {
         subtables.push(data);
         records.push((0, 3, 0));
         records.push((3, 1, 0));
     }
-    if let Some(data) = &format12 {
+    if let Some(data) = &beyond {
         subtables.push(data);
         records.push((3, 10, subtables.len() - 1));
     }
@@ -351,7 +463,92 @@ impl Default for Extent {
     }
 }
 
+pub struct Limits {
+    pub points: u16,
+    pub contours: u16,
+    pub composite_points: u16,
+    pub composite_contours: u16,
+    pub elements: u16,
+    pub depth: u16,
+    pub instructions: u16,
+}
+
+impl Limits {
+    pub fn new() -> Limits {
+        Limits { points: 0, contours: 0, composite_points: 0, composite_contours: 0, elements: 0, depth: 0, instructions: 0 }
+    }
+
+    pub fn include(&mut self, glyf: &read_fonts::tables::glyf::Glyf, loca: &read_fonts::tables::loca::Loca, glyph: u32) {
+        use read_fonts::tables::glyf::Glyph;
+
+        let Ok(Some(parsed)) = loca.get_glyf(read_fonts::types::GlyphId::new(glyph), glyf) else {
+            return;
+        };
+
+        let (points, contours, depth) = Font::count(glyf, loca, glyph);
+        match parsed {
+            Glyph::Simple(simple) => {
+                self.points = self.points.max(points);
+                self.contours = self.contours.max(contours);
+                self.instructions = self.instructions.max(simple.instructions().len() as u16);
+            }
+            Glyph::Composite(composite) => {
+                let (elements, instructions) = composite.count_and_instructions();
+                self.composite_points = self.composite_points.max(points);
+                self.composite_contours = self.composite_contours.max(contours);
+                self.elements = self.elements.max(elements as u16);
+                self.depth = self.depth.max(depth);
+                self.instructions = self.instructions.max(instructions.map(|found| found.len()).unwrap_or(0) as u16);
+            }
+        }
+    }
+
+    pub fn apply(&self, font: &mut Font) {
+        let mut maxp: write_fonts::tables::maxp::Maxp = font.read::<read_fonts::tables::maxp::Maxp>().expect("missing maxp").to_owned_table();
+        maxp.max_points = Some(self.points);
+        maxp.max_contours = Some(self.contours);
+        maxp.max_composite_points = Some(self.composite_points);
+        maxp.max_composite_contours = Some(self.composite_contours);
+        maxp.max_size_of_instructions = Some(self.instructions);
+        maxp.max_component_elements = Some(self.elements);
+        maxp.max_component_depth = Some(self.depth);
+        font.put(Tag::new(b"maxp"), &maxp);
+    }
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits::new()
+    }
+}
+
 impl Font {
+    pub fn count(glyf: &read_fonts::tables::glyf::Glyf, loca: &read_fonts::tables::loca::Loca, glyph: u32) -> (u16, u16, u16) {
+        use read_fonts::tables::glyf::Glyph;
+
+        let Ok(Some(parsed)) = loca.get_glyf(read_fonts::types::GlyphId::new(glyph), glyf) else {
+            return (0, 0, 0);
+        };
+
+        match parsed {
+            Glyph::Simple(simple) => {
+                let ends = simple.end_pts_of_contours();
+                let points = ends.last().map(|end| end.get() as u32 + 1).unwrap_or(0);
+                (points as u16, ends.len() as u16, 0)
+            }
+            Glyph::Composite(composite) => {
+                let (mut points, mut contours, mut depth) = (0u16, 0u16, 0u16);
+                for component in composite.components() {
+                    let (inner, found, nested) = Font::count(glyf, loca, component.glyph.to_u32());
+                    points += inner;
+                    contours += found;
+                    depth = depth.max(nested);
+                }
+                (points, contours, depth + 1)
+            }
+        }
+    }
+
     pub fn resolve(glyf: &read_fonts::tables::glyf::Glyf, loca: &read_fonts::tables::loca::Loca, glyph: u32, affine: [f64; 6], extent: &mut Extent) {
         use read_fonts::tables::glyf::{Anchor, Glyph};
 
@@ -405,10 +602,12 @@ impl Font {
 
         let mut extents: Vec<Option<Extent>> = Vec::with_capacity(count);
         let mut font_extent = Extent::new();
+        let mut limits = Limits::new();
 
         for index in 0..count {
             let mut extent = Extent::new();
             Font::resolve(&glyf, &loca, index as u32, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], &mut extent);
+            limits.include(&glyf, &loca, index as u32);
 
             if extent.any && !glyphs[index].is_empty() {
                 let round = |value: f64| -> i16 { value.round_ties_even() as i16 };
@@ -425,6 +624,7 @@ impl Font {
         }
 
         self.set_glyphs(&glyphs);
+        limits.apply(self);
 
         let mut head = self.get(Tag::new(b"head")).expect("missing head").to_vec();
         let bounds = if font_extent.any {
