@@ -41,8 +41,8 @@ pub fn style() -> Style {
 
 #[test]
 fn test_typo_metrics_flag_preserved_when_base_sets_it() {
-    let (mut base, addon) = components(0x40 | 0x80);
-    let metrics = Metrics::of(&[&base, &addon], false);
+    let (mut base, _addon) = components(0x40 | 0x80);
+    let metrics = Metrics::of(&base, false);
     metrics.apply(&mut base.font, &family(), &style(), 1.0, None);
 
     let os2 = base.font.read::<read_fonts::tables::os2::Os2>().expect("missing OS/2");
@@ -51,8 +51,8 @@ fn test_typo_metrics_flag_preserved_when_base_sets_it() {
 
 #[test]
 fn test_typo_metrics_flag_omitted_when_base_lacks_it() {
-    let (mut base, addon) = components(0x40);
-    let metrics = Metrics::of(&[&base, &addon], false);
+    let (mut base, _addon) = components(0x40);
+    let metrics = Metrics::of(&base, false);
     metrics.apply(&mut base.font, &family(), &style(), 1.0, None);
 
     let os2 = base.font.read::<read_fonts::tables::os2::Os2>().expect("missing OS/2");
@@ -61,8 +61,8 @@ fn test_typo_metrics_flag_omitted_when_base_lacks_it() {
 
 #[test]
 fn test_line_metrics_follow_base() {
-    let (mut base, addon) = components(0x40);
-    let metrics = Metrics::of(&[&base, &addon], false);
+    let (mut base, _addon) = components(0x40);
+    let metrics = Metrics::of(&base, false);
     metrics.apply(&mut base.font, &family(), &style(), 1.0, None);
 
     let hhea = base.font.read::<read_fonts::tables::hhea::Hhea>().expect("missing hhea");
@@ -76,10 +76,33 @@ fn test_line_metrics_follow_base() {
 }
 
 #[test]
-fn test_window_metrics_cover_every_component() {
+fn test_window_metrics_follow_base() {
     let (base, addon) = components(0x40);
-    let metrics = Metrics::of(&[&base, &addon], false);
+    let metrics = Metrics::of(&base, false);
 
-    assert_eq!(metrics.window_ascent, 1160);
-    assert_eq!(metrics.window_descent, 288);
+    let taller = addon.font.read::<read_fonts::tables::os2::Os2>().expect("missing OS/2");
+    assert!(
+        taller.us_win_ascent() > 980 && taller.us_win_descent() > 236,
+        "the addon has to reach past the base for this test to prove anything"
+    );
+
+    assert_eq!(metrics.window_ascent, 980);
+    assert_eq!(metrics.window_descent, 236);
+}
+
+#[test]
+fn test_every_line_height_convention_agrees_with_base() {
+    let (mut base, _addon) = components(0x40 | 0x80);
+    let metrics = Metrics::of(&base, false);
+    metrics.apply(&mut base.font, &family(), &style(), 1.0, None);
+
+    let hhea = base.font.read::<read_fonts::tables::hhea::Hhea>().expect("missing hhea");
+    let os2 = base.font.read::<read_fonts::tables::os2::Os2>().expect("missing OS/2");
+
+    let line = hhea.ascender().to_i16() as i32 - hhea.descender().to_i16() as i32 + hhea.line_gap().to_i16() as i32;
+    let typographic = os2.s_typo_ascender() as i32 - os2.s_typo_descender() as i32 + os2.s_typo_line_gap() as i32;
+    let window = os2.us_win_ascent() as i32 + os2.us_win_descent() as i32;
+    assert_eq!(line, 1216);
+    assert_eq!(typographic, 1216);
+    assert_eq!(window, 1216);
 }

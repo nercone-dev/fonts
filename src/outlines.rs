@@ -302,7 +302,7 @@ impl Outlines {
             });
         }
 
-        let table = cff::cff(&Outlines::information(font, family, style, version), &glyphs);
+        let table = cff::cff(&Outlines::information(font, family, style, version, &glyphs), &glyphs);
         font.set(tags::CFF, table);
 
         for tag in Outlines::truetype {
@@ -320,8 +320,9 @@ impl Outlines {
         font.set(tags::HEAD, head);
     }
 
-    pub fn information(font: &Font, family: &Family, style: &Style, version: &str) -> Information {
+    pub fn information(font: &Font, family: &Family, style: &Style, version: &str, glyphs: &[Glyph]) -> Information {
         let upem = font.upem() as f64;
+        let post = font.read::<read_fonts::tables::post::Post>().expect("missing post");
 
         Information {
             postscript_name: format!("{}-{}", family.filename, style.name()),
@@ -331,10 +332,11 @@ impl Outlines {
             version: version.to_string(),
             notice: family.license.name.to_string(),
             is_fixed_pitch: family.monospace,
-            italic_angle: 0.0,
-            underline_position: -100.0,
-            underline_thickness: 50.0,
-            font_bbox: [0.0, 0.0, 0.0, 0.0],
+            italic_angle: post.italic_angle().to_f64(),
+            underline_position: post.underline_position().to_i16() as f64,
+            underline_thickness: post.underline_thickness().to_i16() as f64,
+            font_bbox: cff::bounds(glyphs),
+            language_group: if family.cjk.is_empty() { 0 } else { 1 },
             upem,
             std_hw: (upem * 0.04).round_ties_even().max(1.0),
             std_vw: (upem * 0.05).round_ties_even().max(1.0),

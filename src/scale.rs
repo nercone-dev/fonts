@@ -2,6 +2,7 @@ use kurbo::Vec2;
 use read_fonts::tables::glyf::CurvePoint;
 use read_fonts::{FontRef, TableProvider};
 use write_fonts::from_obj::{FromTableRef, ToOwnedTable};
+use write_fonts::tables::base::{Axis as BaseAxis, Base, BaseCoord, MinMax};
 use write_fonts::tables::gdef::CaretValue;
 use write_fonts::tables::glyf::{Anchor, Bbox, Glyph};
 use write_fonts::tables::gpos::{
@@ -34,6 +35,7 @@ impl Scaler {
         self.headers(font);
         self.profile(font);
         self.post(font);
+        self.baselines(font);
         self.outlines(font);
         self.variations(font);
         self.controls(font);
@@ -127,6 +129,51 @@ impl Scaler {
         post.underline_position = FWord::new(self.round(post.underline_position.to_i16() as f64) as i16);
         post.underline_thickness = FWord::new(self.round(post.underline_thickness.to_i16() as f64) as i16);
         font.put(tags::POST, &post);
+    }
+
+    pub fn baselines(&self, font: &mut Font) {
+        let base: Option<Base> = font.read::<read_fonts::tables::base::Base>().map(|found| found.to_owned_table());
+        let Some(mut base) = base else { return };
+        for axis in [base.horiz_axis.as_mut(), base.vert_axis.as_mut()].into_iter().flatten() {
+            self.direction(axis);
+        }
+        font.put(tags::BASE, &base);
+    }
+
+    pub fn direction(&self, axis: &mut BaseAxis) {
+        for record in axis.base_script_list.base_script_records.iter_mut() {
+            let script = &mut record.base_script;
+            if let Some(values) = script.base_values.as_mut() {
+                for coordinate in values.base_coords.iter_mut() {
+                    self.baseline(coordinate);
+                }
+            }
+            if let Some(extremes) = script.default_min_max.as_mut() {
+                self.extremes(extremes);
+            }
+            for entry in script.base_lang_sys_records.iter_mut() {
+                self.extremes(&mut entry.min_max);
+            }
+        }
+    }
+
+    pub fn extremes(&self, extremes: &mut MinMax) {
+        for coordinate in [extremes.min_coord.as_mut(), extremes.max_coord.as_mut()].into_iter().flatten() {
+            self.baseline(coordinate);
+        }
+        for record in extremes.feat_min_max_records.iter_mut() {
+            for coordinate in [record.min_coord.as_mut(), record.max_coord.as_mut()].into_iter().flatten() {
+                self.baseline(coordinate);
+            }
+        }
+    }
+
+    pub fn baseline(&self, coordinate: &mut BaseCoord) {
+        match coordinate {
+            BaseCoord::Format1(found) => found.coordinate = self.round(found.coordinate as f64) as i16,
+            BaseCoord::Format2(found) => found.coordinate = self.round(found.coordinate as f64) as i16,
+            BaseCoord::Format3(found) => found.coordinate = self.round(found.coordinate as f64) as i16,
+        }
     }
 
     pub fn bounds(&self, bbox: Bbox) -> Bbox {

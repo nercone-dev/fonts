@@ -1,4 +1,4 @@
-use kurbo::{BezPath, PathEl, Point};
+use kurbo::{BezPath, PathEl, Point, Rect, Shape};
 
 pub const STANDARD_STRINGS: [&str; 391] = [
     ".notdef", "space", "exclam", "quotedbl", "numbersign", "dollar", "percent", "ampersand", "quoteright",
@@ -58,6 +58,7 @@ pub struct Information {
     pub underline_position: f64,
     pub underline_thickness: f64,
     pub font_bbox: [f64; 4],
+    pub language_group: i32,
     pub upem: f64,
     pub std_hw: f64,
     pub std_vw: f64,
@@ -137,6 +138,11 @@ impl Information {
         dict.operator(0x0c0c);
         dict.operator(0x0c0d);
 
+        if self.language_group != 0 {
+            dict.integer(self.language_group);
+            dict.operator(0x0c11);
+        }
+
         if self.default_width != 0.0 {
             dict.number(self.default_width);
             dict.operator(20);
@@ -155,6 +161,25 @@ pub struct Glyph {
     pub name: String,
     pub width: f64,
     pub path: BezPath,
+}
+
+pub fn bounds(glyphs: &[Glyph]) -> [f64; 4] {
+    let mut found: Option<Rect> = None;
+    for glyph in glyphs {
+        if glyph.path.is_empty() {
+            continue;
+        }
+        let extent = glyph.path.bounding_box();
+        found = Some(match found {
+            Some(current) => current.union(extent),
+            None => extent,
+        });
+    }
+
+    match found {
+        Some(extent) => [extent.x0.floor(), extent.y0.floor(), extent.x1.ceil(), extent.y1.ceil()],
+        None => [0.0, 0.0, 0.0, 0.0],
+    }
 }
 
 impl Glyph {
@@ -429,9 +454,8 @@ mod tests {
         path
     }
 
-    #[test]
-    fn serialize() {
-        let information = Information {
+    pub fn information() -> Information {
+        Information {
             postscript_name: "NerconeTest-Regular".to_string(),
             full_name: "Nercone Test Regular".to_string(),
             family_name: "Nercone Test".to_string(),
@@ -443,12 +467,70 @@ mod tests {
             underline_position: -100.0,
             underline_thickness: 50.0,
             font_bbox: [50.0, -200.0, 900.0, 1400.0],
+            language_group: 0,
             upem: 2048.0,
             std_hw: 82.0,
             std_vw: 102.0,
             default_width: 500.0,
             nominal_width: 100.0,
-        };
+        }
+    }
+
+    pub fn holds(dict: &Dict, wanted: &Dict) -> bool {
+        dict.data.windows(wanted.data.len()).any(|window| window == wanted.data)
+    }
+
+    #[test]
+    fn bounds_span_every_drawn_glyph() {
+        let glyphs = [
+            Glyph { name: ".notdef".to_string(), width: 600.0, path: contour(&[(50.0, 0.0), (550.0, 0.0), (550.0, 1400.0), (50.0, 1400.0)]) },
+            Glyph { name: "space".to_string(), width: 500.0, path: BezPath::new() },
+            Glyph { name: "A".to_string(), width: 1024.0, path: contour(&[(-30.5, -220.5), (900.0, -220.5), (900.0, 700.0), (-30.5, 700.0)]) },
+        ];
+
+        assert_eq!(bounds(&glyphs), [-31.0, -221.0, 900.0, 1400.0]);
+    }
+
+    #[test]
+    fn top_dict_declares_the_font_bounding_box() {
+        let information = information();
+        let mut strings = Strings { custom: Vec::new() };
+        let dict = information.top(&mut strings, 0, 0, 0, 0);
+
+        let mut wanted = Dict { data: Vec::new() };
+        for value in information.font_bbox {
+            wanted.number(value);
+        }
+        wanted.operator(5);
+
+        assert!(holds(&dict, &wanted), "the top dictionary has to carry the FontBBox the glyphs occupy");
+    }
+
+    #[test]
+    fn private_dict_declares_the_language_group_of_a_cjk_font() {
+        let mut information = information();
+        information.language_group = 1;
+
+        let mut wanted = Dict { data: Vec::new() };
+        wanted.integer(1);
+        wanted.operator(0x0c11);
+
+        assert!(holds(&information.private(), &wanted), "a font holding CJK glyphs has to declare LanguageGroup 1");
+    }
+
+    #[test]
+    fn private_dict_leaves_the_language_group_alone_for_latin() {
+        let information = information();
+
+        let mut unwanted = Dict { data: Vec::new() };
+        unwanted.operator(0x0c11);
+
+        assert!(!holds(&information.private(), &unwanted), "LanguageGroup 0 is the default and must stay unwritten");
+    }
+
+    #[test]
+    fn serialize() {
+        let information = information();
 
         let mut curved = BezPath::new();
         curved.move_to((100.0, 0.0));

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use kurbo::Vec2;
 use read_fonts::{FontRead, FontRef, TableProvider};
 use write_fonts::from_obj::ToOwnedTable;
+use write_fonts::tables::base::{Axis as BaseAxis, Base, BaseCoord, MinMax};
 use write_fonts::tables::gdef::Gdef;
 use write_fonts::tables::gpos::Gpos;
 use write_fonts::tables::gsub::Gsub;
@@ -112,6 +113,8 @@ impl Merger {
             }
         }
 
+        self.baselines();
+
         self.substitutions = self
             .base
             .font
@@ -138,6 +141,64 @@ impl Merger {
             .get(tags::GDEF)
             .map(|data| read_fonts::tables::gdef::Gdef::read(read_fonts::FontData::new(data)).expect("failed to parse GDEF").to_owned_table())
             .or_else(|| self.addons.iter().any(|addon| addon.font.contains(tags::GDEF)).then(|| Gdef::new(None, None, None, None)));
+    }
+
+    pub fn baselines(&mut self) {
+        if self.base.font.contains(tags::BASE) {
+            return;
+        }
+
+        let mut carried: Option<Base> = None;
+        for addon in &self.addons {
+            if let Some(found) = addon.font.read::<read_fonts::tables::base::Base>() {
+                carried = Some(found.to_owned_table());
+                break;
+            }
+        }
+
+        let Some(mut table) = carried else { return };
+        table.item_var_store = None.into();
+        for axis in [table.horiz_axis.as_mut(), table.vert_axis.as_mut()].into_iter().flatten() {
+            Merger::direction(axis);
+        }
+        self.base.font.put(tags::BASE, &table);
+    }
+
+    pub fn direction(axis: &mut BaseAxis) {
+        for record in axis.base_script_list.base_script_records.iter_mut() {
+            let script = &mut record.base_script;
+            if let Some(values) = script.base_values.as_mut() {
+                for coordinate in values.base_coords.iter_mut() {
+                    Merger::baseline(coordinate);
+                }
+            }
+            if let Some(extremes) = script.default_min_max.as_mut() {
+                Merger::extremes(extremes);
+            }
+            for entry in script.base_lang_sys_records.iter_mut() {
+                Merger::extremes(&mut entry.min_max);
+            }
+        }
+    }
+
+    pub fn extremes(extremes: &mut MinMax) {
+        for coordinate in [extremes.min_coord.as_mut(), extremes.max_coord.as_mut()].into_iter().flatten() {
+            Merger::baseline(coordinate);
+        }
+        for record in extremes.feat_min_max_records.iter_mut() {
+            for coordinate in [record.min_coord.as_mut(), record.max_coord.as_mut()].into_iter().flatten() {
+                Merger::baseline(coordinate);
+            }
+        }
+    }
+
+    pub fn baseline(coordinate: &mut BaseCoord) {
+        let value = match coordinate {
+            BaseCoord::Format1(found) => found.coordinate,
+            BaseCoord::Format2(found) => found.coordinate,
+            BaseCoord::Format3(found) => found.coordinate,
+        };
+        *coordinate = BaseCoord::format_1(value);
     }
 
     pub fn defaults(&mut self) {

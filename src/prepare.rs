@@ -57,7 +57,7 @@ impl Tables {
 
     pub const apple: [&'static str; 16] = ["morx", "mort", "feat", "prop", "kerx", "kern", "ankr", "bsln", "lcar", "opbd", "trak", "just", "Zapf", "acnt", "fdsc", "fmtx"];
 
-    pub const private: [&'static str; 14] = ["DSIG", "PfEd", "FFTM", "TeX ", "Silf", "Glat", "Gloc", "Feat", "Sill", "gasp", "MVAR", "STAT", "cvar", "BASE"];
+    pub const private: [&'static str; 13] = ["DSIG", "PfEd", "FFTM", "TeX ", "Silf", "Glat", "Gloc", "Feat", "Sill", "gasp", "MVAR", "STAT", "cvar"];
 
     pub fn dropped() -> Vec<Tag> {
         let mut found: BTreeSet<&str> = Tables::defaults.iter().copied().collect();

@@ -181,9 +181,7 @@ impl Builder {
             addons.push(bold);
         }
 
-        let mut components: Vec<&Component> = vec![&base];
-        components.extend(addons.iter());
-        let metrics = Metrics::of(&components, slope.italic());
+        let metrics = Metrics::of(&base, slope.italic());
 
         let substitutions = match &bold_cmaps {
             None => BTreeMap::new(),
@@ -201,6 +199,8 @@ impl Builder {
         };
 
         let space = self.space(reference.map(|index| &addons[index]).unwrap_or(&base));
+        let mut components: Vec<&Component> = vec![&base];
+        components.extend(addons.iter());
         let masters = self.masters(&components, &space);
         self.note(&format!(
             "{}: {} masters at {}",

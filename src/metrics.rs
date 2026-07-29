@@ -41,20 +41,12 @@ impl Metrics {
         (self.upem, (self.upem as f64 * (-self.italic_angle).to_radians().tan()).round_ties_even() as i32)
     }
 
-    pub fn of(components: &[&Component], italic: bool) -> Metrics {
-        let base = &components[0].font;
+    pub fn of(component: &Component, italic: bool) -> Metrics {
+        let base = &component.font;
         let os2 = base.read::<read_fonts::tables::os2::Os2>().expect("missing OS/2");
         let hhea = base.read::<read_fonts::tables::hhea::Hhea>().expect("missing hhea");
         let post = base.read::<read_fonts::tables::post::Post>().expect("missing post");
         let upem = base.upem() as i32;
-
-        let mut ascents = Vec::new();
-        let mut descents = Vec::new();
-        for component in components {
-            let other = component.font.read::<read_fonts::tables::os2::Os2>().expect("missing OS/2");
-            ascents.push((other.us_win_ascent() as i32).abs());
-            descents.push((other.us_win_descent() as i32).abs());
-        }
 
         Metrics {
             upem,
@@ -64,8 +56,8 @@ impl Metrics {
             line_ascender: (hhea.ascender().to_i16() as i32).abs(),
             line_descender: -(hhea.descender().to_i16() as i32).abs(),
             line_gap: (hhea.line_gap().to_i16() as i32).abs(),
-            window_ascent: ascents.iter().copied().max().unwrap_or(0),
-            window_descent: descents.iter().copied().max().unwrap_or(0),
+            window_ascent: (os2.us_win_ascent() as i32).abs(),
+            window_descent: (os2.us_win_descent() as i32).abs(),
             typo_metrics: os2.fs_selection().contains(SelectionFlags::USE_TYPO_METRICS),
             cap_height: match os2.s_cap_height() {
                 Some(value) if value != 0 => value as i32,

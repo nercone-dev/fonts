@@ -759,6 +759,7 @@ pub mod tags {
     pub const VVAR: Tag = Tag::new(b"VVAR");
     pub const MVAR: Tag = Tag::new(b"MVAR");
     pub const STAT: Tag = Tag::new(b"STAT");
+    pub const BASE: Tag = Tag::new(b"BASE");
     pub const GDEF: Tag = Tag::new(b"GDEF");
     pub const GSUB: Tag = Tag::new(b"GSUB");
     pub const GPOS: Tag = Tag::new(b"GPOS");

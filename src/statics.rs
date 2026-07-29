@@ -4,6 +4,7 @@ use kurbo::{Point, Vec2};
 use read_fonts::{FontRef, TableProvider};
 use write_fonts::from_obj::{FromTableRef, ToOwnedTable};
 use write_fonts::tables::avar::{Avar, AxisValueMap, SegmentMaps};
+use write_fonts::tables::base::{Axis as BaseAxis, Base, BaseCoord, MinMax};
 use write_fonts::tables::gdef::{CaretValue, Gdef};
 use write_fonts::tables::glyf::{Anchor, Bbox, Glyph};
 use write_fonts::tables::gpos::{
@@ -123,6 +124,7 @@ impl Pin {
             self.outlines(font, pin, &axes);
         }
         self.store(font, pin, &axes);
+        self.baselines(font, pin, &axes);
         self.declare(font);
     }
 
@@ -362,116 +364,125 @@ impl Pin {
         font.put(tags::GVAR, &table);
     }
 
+    pub fn fold(&self, store: &read_fonts::tables::variations::ItemVariationStore, pin: f64, axes: &[Tag]) -> (Fold, ItemVariationStore) {
+        let remaining: Vec<Tag> = axes.iter().copied().filter(|tag| *tag != Axis::tag()).collect();
+        let supports: Vec<Region> = Mapping::regions(store.offset_data().as_bytes())
+            .iter()
+            .map(|region| {
+                axes.iter()
+                    .copied()
+                    .zip(region.iter().copied())
+                    .filter(|(_, (_, peak, _))| *peak != 0.0)
+                    .collect()
+            })
+            .collect();
+
+        let mut deltas: HashMap<u32, f64> = HashMap::new();
+        let mut regionlist: Vec<Region> = Vec::new();
+        let mut rebuilt: Vec<Option<ItemVariationData>> = Vec::new();
+
+        for (outer, data) in store.item_variation_data().iter().enumerate() {
+            let Some(Ok(data)) = data else {
+                rebuilt.push(None);
+                continue;
+            };
+            let items = data.item_count() as usize;
+            let rows: Vec<Vec<f64>> = (0..items)
+                .map(|inner| data.delta_set(inner as u16).map(|value| value as f64).collect())
+                .collect();
+
+            let mut columns: Vec<(Region, Vec<f64>)> = Vec::new();
+            let mut folded = vec![0.0; items];
+            for (column, entry) in data.region_indexes().iter().enumerate() {
+                let mut region = supports[entry.get() as usize].clone();
+                let mut scalar = 1.0;
+                if let Some(position) = region.iter().position(|(tag, _)| *tag == Axis::tag()) {
+                    match Pin::solve(region[position].1, pin) {
+                        None => continue,
+                        Some(found) => {
+                            scalar = found;
+                            region.remove(position);
+                        }
+                    }
+                }
+                if region.is_empty() {
+                    for (value, row) in folded.iter_mut().zip(&rows) {
+                        *value += row[column] * scalar;
+                    }
+                } else {
+                    if !columns.iter().any(|(found, _)| *found == region) {
+                        columns.push((region.clone(), vec![0.0; items]));
+                    }
+                    let values = &mut columns.iter_mut().find(|(found, _)| *found == region).unwrap().1;
+                    for (value, row) in values.iter_mut().zip(&rows) {
+                        *value += row[column] * scalar;
+                    }
+                }
+            }
+
+            for (inner, value) in folded.iter().enumerate() {
+                deltas.insert(((outer as u32) << 16) | inner as u32, *value);
+            }
+
+            let indexes: Vec<u16> = columns
+                .iter()
+                .map(|(region, _)| match regionlist.iter().position(|found| found == region) {
+                    Some(found) => found as u16,
+                    None => {
+                        regionlist.push(region.clone());
+                        (regionlist.len() - 1) as u16
+                    }
+                })
+                .collect();
+            let mut encoded = Vec::new();
+            for item in 0..items {
+                for (_, values) in &columns {
+                    encoded.extend((otround(values[item]) as i16).to_be_bytes());
+                }
+            }
+            rebuilt.push(Some(ItemVariationData::new(items as u16, columns.len() as u16, indexes, encoded)));
+        }
+
+        let list = VariationRegionList::new(
+            remaining.len() as u16,
+            regionlist
+                .iter()
+                .map(|region| {
+                    VariationRegion::new(
+                        remaining
+                            .iter()
+                            .map(|tag| match region.iter().find(|(found, _)| found == tag) {
+                                Some((_, (lower, peak, upper))) => RegionAxisCoordinates::new(
+                                    F2Dot14::from_f32(*lower as f32),
+                                    F2Dot14::from_f32(*peak as f32),
+                                    F2Dot14::from_f32(*upper as f32),
+                                ),
+                                None => RegionAxisCoordinates::new(F2Dot14::from_f32(0.0), F2Dot14::from_f32(0.0), F2Dot14::from_f32(0.0)),
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
+        );
+
+        (Fold { deltas, factor: 1.0 }, ItemVariationStore::new(list, rebuilt))
+    }
+
     pub fn store(&self, font: &mut Font, pin: f64, axes: &[Tag]) {
         let Some(gdef) = font.read::<read_fonts::tables::gdef::Gdef>() else {
             return;
         };
         let mut owned: Gdef = gdef.to_owned_table();
-        let mut deltas: HashMap<u32, f64> = HashMap::new();
 
-        if let Some(Ok(store)) = gdef.item_var_store() {
-            let remaining: Vec<Tag> = axes.iter().copied().filter(|tag| *tag != Axis::tag()).collect();
-            let supports: Vec<Region> = Mapping::regions(store.offset_data().as_bytes())
-                .iter()
-                .map(|region| {
-                    axes.iter()
-                        .copied()
-                        .zip(region.iter().copied())
-                        .filter(|(_, (_, peak, _))| *peak != 0.0)
-                        .collect()
-                })
-                .collect();
-
-            let mut regionlist: Vec<Region> = Vec::new();
-            let mut rebuilt: Vec<Option<ItemVariationData>> = Vec::new();
-
-            for (outer, data) in store.item_variation_data().iter().enumerate() {
-                let Some(Ok(data)) = data else {
-                    rebuilt.push(None);
-                    continue;
-                };
-                let items = data.item_count() as usize;
-                let rows: Vec<Vec<f64>> = (0..items)
-                    .map(|inner| data.delta_set(inner as u16).map(|value| value as f64).collect())
-                    .collect();
-
-                let mut columns: Vec<(Region, Vec<f64>)> = Vec::new();
-                let mut folded = vec![0.0; items];
-                for (column, entry) in data.region_indexes().iter().enumerate() {
-                    let mut region = supports[entry.get() as usize].clone();
-                    let mut scalar = 1.0;
-                    if let Some(position) = region.iter().position(|(tag, _)| *tag == Axis::tag()) {
-                        match Pin::solve(region[position].1, pin) {
-                            None => continue,
-                            Some(found) => {
-                                scalar = found;
-                                region.remove(position);
-                            }
-                        }
-                    }
-                    if region.is_empty() {
-                        for (value, row) in folded.iter_mut().zip(&rows) {
-                            *value += row[column] * scalar;
-                        }
-                    } else {
-                        if !columns.iter().any(|(found, _)| *found == region) {
-                            columns.push((region.clone(), vec![0.0; items]));
-                        }
-                        let values = &mut columns.iter_mut().find(|(found, _)| *found == region).unwrap().1;
-                        for (value, row) in values.iter_mut().zip(&rows) {
-                            *value += row[column] * scalar;
-                        }
-                    }
-                }
-
-                for (inner, value) in folded.iter().enumerate() {
-                    deltas.insert(((outer as u32) << 16) | inner as u32, *value);
-                }
-
-                let indexes: Vec<u16> = columns
-                    .iter()
-                    .map(|(region, _)| match regionlist.iter().position(|found| found == region) {
-                        Some(found) => found as u16,
-                        None => {
-                            regionlist.push(region.clone());
-                            (regionlist.len() - 1) as u16
-                        }
-                    })
-                    .collect();
-                let mut encoded = Vec::new();
-                for item in 0..items {
-                    for (_, values) in &columns {
-                        encoded.extend((otround(values[item]) as i16).to_be_bytes());
-                    }
-                }
-                rebuilt.push(Some(ItemVariationData::new(items as u16, columns.len() as u16, indexes, encoded)));
+        let fold = match gdef.item_var_store() {
+            Some(Ok(store)) => {
+                let (fold, rebuilt) = self.fold(&store, pin, axes);
+                owned.item_var_store = Some(rebuilt).into();
+                fold
             }
+            _ => Fold { deltas: HashMap::new(), factor: 1.0 },
+        };
 
-            let list = VariationRegionList::new(
-                remaining.len() as u16,
-                regionlist
-                    .iter()
-                    .map(|region| {
-                        VariationRegion::new(
-                            remaining
-                                .iter()
-                                .map(|tag| match region.iter().find(|(found, _)| found == tag) {
-                                    Some((_, (lower, peak, upper))) => RegionAxisCoordinates::new(
-                                        F2Dot14::from_f32(*lower as f32),
-                                        F2Dot14::from_f32(*peak as f32),
-                                        F2Dot14::from_f32(*upper as f32),
-                                    ),
-                                    None => RegionAxisCoordinates::new(F2Dot14::from_f32(0.0), F2Dot14::from_f32(0.0), F2Dot14::from_f32(0.0)),
-                                })
-                                .collect(),
-                        )
-                    })
-                    .collect(),
-            );
-            owned.item_var_store = Some(ItemVariationStore::new(list, rebuilt)).into();
-        }
-
-        let fold = Fold { deltas, factor: 1.0 };
         fold.carets(&mut owned);
         font.put(tags::GDEF, &owned);
 
@@ -480,6 +491,25 @@ impl Pin {
             fold.gpos(&mut owned);
             font.put(tags::GPOS, &owned);
         }
+    }
+
+    pub fn baselines(&self, font: &mut Font, pin: f64, axes: &[Tag]) {
+        let Some(base) = font.read::<read_fonts::tables::base::Base>() else {
+            return;
+        };
+        let mut owned: Base = base.to_owned_table();
+
+        let fold = match base.item_var_store() {
+            Some(Ok(store)) => {
+                let (fold, rebuilt) = self.fold(&store, pin, axes);
+                owned.item_var_store = Some(rebuilt).into();
+                fold
+            }
+            _ => Fold { deltas: HashMap::new(), factor: 1.0 },
+        };
+
+        fold.baselines(&mut owned);
+        font.put(tags::BASE, &owned);
     }
 
     pub fn declare(&self, font: &mut Font) {
@@ -744,6 +774,7 @@ impl Rebase {
             self.outlines(font, &limits);
         }
         self.store(font, &limits);
+        self.baselines(font, &limits);
         self.features(font, &limits);
         self.declare(font);
     }
@@ -973,102 +1004,111 @@ impl Rebase {
         }
     }
 
+    pub fn fold(&self, store: &read_fonts::tables::variations::ItemVariationStore, limits: &Limits) -> (Fold, ItemVariationStore) {
+        let supports: Vec<Option<(f64, f64, f64)>> = Mapping::regions(store.offset_data().as_bytes())
+            .iter()
+            .map(|region| {
+                let triple = region.first().copied().unwrap_or((0.0, 0.0, 0.0));
+                if triple.1 != 0.0 { Some(triple) } else { None }
+            })
+            .collect();
+
+        let mut deltas: HashMap<u32, f64> = HashMap::new();
+        let mut regionlist: Vec<(f64, f64, f64)> = Vec::new();
+        let mut rebuilt: Vec<Option<ItemVariationData>> = Vec::new();
+
+        for (outer, data) in store.item_variation_data().iter().enumerate() {
+            let Some(Ok(data)) = data else {
+                rebuilt.push(None);
+                continue;
+            };
+            let items = data.item_count() as usize;
+            let rows: Vec<Vec<f64>> = (0..items)
+                .map(|inner| data.delta_set(inner as u16).map(|value| value as f64).collect())
+                .collect();
+
+            let mut columns: Vec<((f64, f64, f64), Vec<f64>)> = Vec::new();
+            let mut folded = vec![0.0; items];
+            for (column, entry) in data.region_indexes().iter().enumerate() {
+                let pieces = match supports[entry.get() as usize] {
+                    None => vec![(1.0, None)],
+                    Some(tent) => limits.limit(tent),
+                };
+                for (multiplier, piece) in pieces {
+                    match piece {
+                        None => {
+                            for (value, row) in folded.iter_mut().zip(&rows) {
+                                *value += row[column] * multiplier;
+                            }
+                        }
+                        Some(tent) => {
+                            if !columns.iter().any(|(found, _)| *found == tent) {
+                                columns.push((tent, vec![0.0; items]));
+                            }
+                            let values = &mut columns.iter_mut().find(|(found, _)| *found == tent).unwrap().1;
+                            for (value, row) in values.iter_mut().zip(&rows) {
+                                *value += row[column] * multiplier;
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (inner, value) in folded.iter().enumerate() {
+                deltas.insert(((outer as u32) << 16) | inner as u32, *value);
+            }
+
+            let indexes: Vec<u16> = columns
+                .iter()
+                .map(|(tent, _)| match regionlist.iter().position(|found| found == tent) {
+                    Some(found) => found as u16,
+                    None => {
+                        regionlist.push(*tent);
+                        (regionlist.len() - 1) as u16
+                    }
+                })
+                .collect();
+            let mut encoded = Vec::new();
+            for item in 0..items {
+                for (_, values) in &columns {
+                    encoded.extend((otround(self.factor * otround(values[item]) as f64) as i16).to_be_bytes());
+                }
+            }
+            rebuilt.push(Some(ItemVariationData::new(items as u16, columns.len() as u16, indexes, encoded)));
+        }
+
+        let list = VariationRegionList::new(
+            1,
+            regionlist
+                .iter()
+                .map(|(lower, peak, upper)| {
+                    VariationRegion::new(vec![RegionAxisCoordinates::new(
+                        F2Dot14::from_f32(quantize(*lower) as f32),
+                        F2Dot14::from_f32(quantize(*peak) as f32),
+                        F2Dot14::from_f32(quantize(*upper) as f32),
+                    )])
+                })
+                .collect(),
+        );
+
+        (Fold { deltas, factor: self.factor }, ItemVariationStore::new(list, rebuilt))
+    }
+
     pub fn store(&self, font: &mut Font, limits: &Limits) {
         let Some(gdef) = font.read::<read_fonts::tables::gdef::Gdef>() else {
             return;
         };
         let mut owned: Gdef = gdef.to_owned_table();
-        let mut deltas: HashMap<u32, f64> = HashMap::new();
 
-        if let Some(Ok(store)) = gdef.item_var_store() {
-            let supports: Vec<Option<(f64, f64, f64)>> = Mapping::regions(store.offset_data().as_bytes())
-                .iter()
-                .map(|region| {
-                    let triple = region.first().copied().unwrap_or((0.0, 0.0, 0.0));
-                    if triple.1 != 0.0 { Some(triple) } else { None }
-                })
-                .collect();
-
-            let mut regionlist: Vec<(f64, f64, f64)> = Vec::new();
-            let mut rebuilt: Vec<Option<ItemVariationData>> = Vec::new();
-
-            for (outer, data) in store.item_variation_data().iter().enumerate() {
-                let Some(Ok(data)) = data else {
-                    rebuilt.push(None);
-                    continue;
-                };
-                let items = data.item_count() as usize;
-                let rows: Vec<Vec<f64>> = (0..items)
-                    .map(|inner| data.delta_set(inner as u16).map(|value| value as f64).collect())
-                    .collect();
-
-                let mut columns: Vec<((f64, f64, f64), Vec<f64>)> = Vec::new();
-                let mut folded = vec![0.0; items];
-                for (column, entry) in data.region_indexes().iter().enumerate() {
-                    let pieces = match supports[entry.get() as usize] {
-                        None => vec![(1.0, None)],
-                        Some(tent) => limits.limit(tent),
-                    };
-                    for (multiplier, piece) in pieces {
-                        match piece {
-                            None => {
-                                for (value, row) in folded.iter_mut().zip(&rows) {
-                                    *value += row[column] * multiplier;
-                                }
-                            }
-                            Some(tent) => {
-                                if !columns.iter().any(|(found, _)| *found == tent) {
-                                    columns.push((tent, vec![0.0; items]));
-                                }
-                                let values = &mut columns.iter_mut().find(|(found, _)| *found == tent).unwrap().1;
-                                for (value, row) in values.iter_mut().zip(&rows) {
-                                    *value += row[column] * multiplier;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                for (inner, value) in folded.iter().enumerate() {
-                    deltas.insert(((outer as u32) << 16) | inner as u32, *value);
-                }
-
-                let indexes: Vec<u16> = columns
-                    .iter()
-                    .map(|(tent, _)| match regionlist.iter().position(|found| found == tent) {
-                        Some(found) => found as u16,
-                        None => {
-                            regionlist.push(*tent);
-                            (regionlist.len() - 1) as u16
-                        }
-                    })
-                    .collect();
-                let mut encoded = Vec::new();
-                for item in 0..items {
-                    for (_, values) in &columns {
-                        encoded.extend((otround(self.factor * otround(values[item]) as f64) as i16).to_be_bytes());
-                    }
-                }
-                rebuilt.push(Some(ItemVariationData::new(items as u16, columns.len() as u16, indexes, encoded)));
+        let fold = match gdef.item_var_store() {
+            Some(Ok(store)) => {
+                let (fold, rebuilt) = self.fold(&store, limits);
+                owned.item_var_store = Some(rebuilt).into();
+                fold
             }
+            _ => Fold { deltas: HashMap::new(), factor: self.factor },
+        };
 
-            let list = VariationRegionList::new(
-                1,
-                regionlist
-                    .iter()
-                    .map(|(lower, peak, upper)| {
-                        VariationRegion::new(vec![RegionAxisCoordinates::new(
-                            F2Dot14::from_f32(quantize(*lower) as f32),
-                            F2Dot14::from_f32(quantize(*peak) as f32),
-                            F2Dot14::from_f32(quantize(*upper) as f32),
-                        )])
-                    })
-                    .collect(),
-            );
-            owned.item_var_store = Some(ItemVariationStore::new(list, rebuilt)).into();
-        }
-
-        let fold = Fold { deltas, factor: self.factor };
         fold.carets(&mut owned);
         font.put(tags::GDEF, &owned);
 
@@ -1077,6 +1117,25 @@ impl Rebase {
             fold.gpos(&mut owned);
             font.put(tags::GPOS, &owned);
         }
+    }
+
+    pub fn baselines(&self, font: &mut Font, limits: &Limits) {
+        let Some(base) = font.read::<read_fonts::tables::base::Base>() else {
+            return;
+        };
+        let mut owned: Base = base.to_owned_table();
+
+        let fold = match base.item_var_store() {
+            Some(Ok(store)) => {
+                let (fold, rebuilt) = self.fold(&store, limits);
+                owned.item_var_store = Some(rebuilt).into();
+                fold
+            }
+            _ => Fold { deltas: HashMap::new(), factor: self.factor },
+        };
+
+        fold.baselines(&mut owned);
+        font.put(tags::BASE, &owned);
     }
 
     pub fn features(&self, font: &mut Font, limits: &Limits) {
@@ -1537,6 +1596,51 @@ impl Fold {
         }
     }
 
+    pub fn baselines(&self, table: &mut Base) {
+        for axis in [table.horiz_axis.as_mut(), table.vert_axis.as_mut()].into_iter().flatten() {
+            self.direction(axis);
+        }
+    }
+
+    pub fn direction(&self, axis: &mut BaseAxis) {
+        for record in axis.base_script_list.base_script_records.iter_mut() {
+            let script = &mut record.base_script;
+            if let Some(values) = script.base_values.as_mut() {
+                for coordinate in values.base_coords.iter_mut() {
+                    self.baseline(coordinate);
+                }
+            }
+            if let Some(extremes) = script.default_min_max.as_mut() {
+                self.extremes(extremes);
+            }
+            for entry in script.base_lang_sys_records.iter_mut() {
+                self.extremes(&mut entry.min_max);
+            }
+        }
+    }
+
+    pub fn extremes(&self, extremes: &mut MinMax) {
+        for coordinate in [extremes.min_coord.as_mut(), extremes.max_coord.as_mut()].into_iter().flatten() {
+            self.baseline(coordinate);
+        }
+        for record in extremes.feat_min_max_records.iter_mut() {
+            for coordinate in [record.min_coord.as_mut(), record.max_coord.as_mut()].into_iter().flatten() {
+                self.baseline(coordinate);
+            }
+        }
+    }
+
+    pub fn baseline(&self, coordinate: &mut BaseCoord) {
+        match coordinate {
+            BaseCoord::Format1(found) => found.coordinate = self.merge(found.coordinate, 0),
+            BaseCoord::Format2(found) => found.coordinate = self.merge(found.coordinate, 0),
+            BaseCoord::Format3(found) => {
+                let delta = self.delta(found.device.as_ref());
+                found.coordinate = self.merge(found.coordinate, delta);
+            }
+        }
+    }
+
     pub fn carets(&self, table: &mut Gdef) {
         if let Some(list) = table.lig_caret_list.as_mut() {
             for glyph in list.lig_glyphs.iter_mut() {
@@ -1645,52 +1749,182 @@ pub fn hvar(font: &mut Font) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prepare::{Component, Features};
 
     #[allow(non_upper_case_globals)]
-    pub const scratchpad: &str = "/private/tmp/claude-501/-Volumes-Developments-nercone-dev-fonts/d08e5eec-1bbb-4368-8fb4-36df636f3bff/scratchpad/statics-test";
+    pub const sansjp: &str = "build/sources/noto/NotoSansJP.ttf";
+    #[allow(non_upper_case_globals)]
+    pub const serifjp: &str = "build/sources/noto/NotoSerifJP.ttf";
 
-    pub fn pinned(value: f64, name: &str) {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/build/files/NerconeSansJP-Variable.ttf");
-        let data = std::fs::read(path).expect("missing variable font");
-        let mut font = Font::new(&data);
+    pub fn sample(path: &str) -> Font {
+        let data = std::fs::read(path).expect("missing test font");
+        let codepoints = ['A', 'a', '1', 'あ', 'ア', '漢', '。'].iter().map(|letter| *letter as u32).collect();
+        let mut component = Component::new(Font::new(&data), "Sample", Some(codepoints), Some(Features::cjk()));
+        component.subset();
+        component.font
+    }
 
+    pub fn axis(font: &Font) -> (f64, f64, f64) {
+        let fvar = font.read::<read_fonts::tables::fvar::Fvar>().expect("missing fvar");
+        let entry = fvar
+            .axes()
+            .expect("failed to parse fvar axes")
+            .iter()
+            .find(|entry| entry.axis_tag() == Axis::tag())
+            .expect("missing weight axis");
+        (entry.min_value().to_f64(), entry.default_value().to_f64(), entry.max_value().to_f64())
+    }
+
+    pub fn coordinate(font: &Font, weight: f64) -> f64 {
+        let (minimum, default, maximum) = axis(font);
+        let plain = Axis::new(minimum, default, maximum).normalize(weight);
+        match Space::mappings(font).first() {
+            Some(pairs) if !pairs.is_empty() => piecewise(plain, pairs),
+            _ => plain,
+        }
+    }
+
+    pub fn entry(coordinate: &BaseCoord) -> (i16, Option<u32>) {
+        match coordinate {
+            BaseCoord::Format1(found) => (found.coordinate, None),
+            BaseCoord::Format2(found) => (found.coordinate, None),
+            BaseCoord::Format3(found) => {
+                let key = match found.device.as_ref() {
+                    Some(DeviceOrVariationIndex::VariationIndex(index)) => {
+                        Some(((index.delta_set_outer_index as u32) << 16) | index.delta_set_inner_index as u32)
+                    }
+                    _ => None,
+                };
+                (found.coordinate, key)
+            }
+        }
+    }
+
+    pub fn entries(table: &Base) -> Vec<(i16, Option<u32>)> {
+        let mut found = Vec::new();
+        let collect = |extremes: &MinMax, found: &mut Vec<(i16, Option<u32>)>| {
+            for coordinate in [extremes.min_coord.as_ref(), extremes.max_coord.as_ref()].into_iter().flatten() {
+                found.push(entry(coordinate));
+            }
+            for record in &extremes.feat_min_max_records {
+                for coordinate in [record.min_coord.as_ref(), record.max_coord.as_ref()].into_iter().flatten() {
+                    found.push(entry(coordinate));
+                }
+            }
+        };
+
+        for axis in [table.horiz_axis.as_ref(), table.vert_axis.as_ref()].into_iter().flatten() {
+            for record in &axis.base_script_list.base_script_records {
+                let script = &record.base_script;
+                if let Some(values) = script.base_values.as_ref() {
+                    for coordinate in values.base_coords.iter() {
+                        found.push(entry(coordinate));
+                    }
+                }
+                if let Some(extremes) = script.default_min_max.as_ref() {
+                    collect(extremes, &mut found);
+                }
+                for record in &script.base_lang_sys_records {
+                    collect(&record.min_max, &mut found);
+                }
+            }
+        }
+        found
+    }
+
+    pub fn resolved(font: &Font, weight: Option<f64>) -> Vec<f64> {
+        let base = font.read::<read_fonts::tables::base::Base>().expect("missing BASE");
+        let owned: Base = base.to_owned_table();
+
+        let mut deltas: HashMap<u32, f64> = HashMap::new();
+        if let (Some(weight), Some(Ok(store))) = (weight, base.item_var_store()) {
+            let location = HashMap::from([(Axis::tag(), coordinate(font, weight))]);
+            let supports: Vec<(f64, f64, f64)> = Mapping::regions(store.offset_data().as_bytes())
+                .iter()
+                .map(|region| region.first().copied().unwrap_or((0.0, 0.0, 0.0)))
+                .collect();
+
+            for (outer, data) in store.item_variation_data().iter().enumerate() {
+                let Some(Ok(data)) = data else { continue };
+                for inner in 0..data.item_count() {
+                    let row: Vec<i32> = data.delta_set(inner).collect();
+                    let mut total = 0.0;
+                    for (column, index) in data.region_indexes().iter().enumerate() {
+                        let support = [(Axis::tag(), supports[index.get() as usize])];
+                        total += row[column] as f64 * support_scalar(&location, &support);
+                    }
+                    deltas.insert(((outer as u32) << 16) | inner as u32, total);
+                }
+            }
+        }
+
+        entries(&owned)
+            .iter()
+            .map(|(value, key)| *value as f64 + key.and_then(|key| deltas.get(&key)).copied().unwrap_or(0.0))
+            .collect()
+    }
+
+    pub fn close(found: &[f64], wanted: &[f64], slack: f64, what: &str) {
+        assert_eq!(found.len(), wanted.len(), "{}: expected {} baselines, found {}", what, wanted.len(), found.len());
+        for (index, (found, wanted)) in found.iter().zip(wanted).enumerate() {
+            assert!(
+                (found - wanted).abs() <= slack,
+                "{}: baseline {} is {:.3}, expected {:.3}",
+                what,
+                index,
+                found,
+                wanted,
+            );
+        }
+    }
+
+    pub fn pinned(path: &str, value: f64) {
+        let source = sample(path);
+        let mut font = sample(path);
         Pin::new(value).apply(&mut font);
-        hvar(&mut font);
 
-        std::fs::create_dir_all(scratchpad).expect("failed to create scratchpad");
-        std::fs::write(format!("{}/{}", scratchpad, name), font.data()).expect("failed to write font");
+        let axes = Pin::axes(&font);
+        assert!(!axes.contains(&Axis::tag()), "the weight axis survived pinning: {:?}", axes);
+        assert_eq!(font.upem(), source.upem());
+        assert_eq!(font.glyph_count(), source.glyph_count());
+
+        close(&resolved(&font, None), &resolved(&source, Some(value)), 1.0, "pinned baselines");
     }
 
     #[test]
     fn pin700() {
-        pinned(700.0, "rust-700.ttf");
+        pinned(sansjp, 700.0);
     }
 
     #[test]
     fn pin400() {
-        pinned(400.0, "rust-400.ttf");
+        pinned(sansjp, 400.0);
     }
 
-    #[allow(non_upper_case_globals)]
-    pub const inputs: &str = "/private/tmp/claude-501/-Volumes-Developments-nercone-dev-fonts/d08e5eec-1bbb-4368-8fb4-36df636f3bff/scratchpad/verify/out";
-
-    pub fn rebased(source: &str, minimum: f64, default: f64, maximum: f64, factor: f64, name: &str) {
-        let data = std::fs::read(format!("{}/{}", inputs, source)).expect("missing rebase input");
-        let mut font = Font::new(&data);
-
+    pub fn rebased(path: &str, minimum: f64, default: f64, maximum: f64, factor: f64) {
+        let source = sample(path);
+        let mut font = sample(path);
         Rebase::new(minimum, default, maximum, factor).apply(&mut font);
 
-        std::fs::create_dir_all(scratchpad).expect("failed to create scratchpad");
-        std::fs::write(format!("{}/{}", scratchpad, name), font.data()).expect("failed to write font");
+        assert_eq!(axis(&font), (minimum, default, maximum));
+        assert_eq!(font.upem(), otround(source.upem() as f64 * factor) as u16);
+
+        for weight in [minimum, default, 700.0, maximum] {
+            let wanted: Vec<f64> = resolved(&source, Some(weight)).iter().map(|value| value * factor).collect();
+            close(&resolved(&font, Some(weight)), &wanted, 2.0, &format!("baselines at {}", weight));
+        }
+
+        let wanted: Vec<f64> = resolved(&source, Some(default)).iter().map(|value| value * factor).collect();
+        close(&resolved(&font, None), &wanted, 2.0, "baselines of the default instance");
     }
 
     #[test]
     fn rebasesans() {
-        rebased("sub-sansjp.harfbuzz.ttf", 100.0, 400.0, 900.0, 2048.0 / 1000.0, "rust-rebase-sans.ttf");
+        rebased(sansjp, 100.0, 400.0, 900.0, 2048.0 / 1000.0);
     }
 
     #[test]
     fn rebaseserif() {
-        rebased("sub-serifjp.harfbuzz.ttf", 200.0, 400.0, 900.0, 1.0, "rust-rebase-serif.ttf");
+        rebased(serifjp, 200.0, 400.0, 900.0, 1.0);
     }
 }
