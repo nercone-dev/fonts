@@ -10,7 +10,7 @@
 
       @font-face { font-family: "Inter"; src: url("build/sources/inter/InterVariable.ttf"); }
       @font-face { font-family: "Charter"; src: url("build/sources/charter/Charter Regular.ttf"); }
-      @font-face { font-family: "Meslo"; src: url("build/sources/meslo/MesloLGS-Regular.ttf"); }
+      @font-face { font-family: "MesloLGS"; src: url("build/sources/meslo/MesloLGS-Regular.ttf"); }
 
       @font-face { font-family: "Noto Sans JP"; src: url("build/sources/noto/NotoSansJP.ttf"); }
       @font-face { font-family: "Noto Serif JP"; src: url("build/sources/noto/NotoSerifJP.ttf"); }
@@ -32,13 +32,13 @@
       }
 
       .stack {
-        position: relative;
-        height: 96px;
+        display: grid;
         padding: 16px;
         outline: 1px solid #c0c0c0;
+        margin-bottom: 8px;
       }
       .stack span {
-        position: absolute;
+        grid-area: 1 / 1;
         font-size: 48px;
         line-height: 1.0;
         mix-blend-mode: multiply;
@@ -56,22 +56,46 @@
   <body>
     <h1>nercone-dev/fonts checker</h1>
 
-    <h2>Sans — red: Inter + Noto Sans JP / blue: Nercone Sans JP</h2>
-    <div class="stack">
-      <span class="a" style="font-family: Inter, 'Noto Sans JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
-      <span class="b" style="font-family: 'Nercone Sans JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
-    </div>
+    <section id="sans">
+      <h2>Sans — red: Inter + Noto Sans JP / blue: Nercone Sans JP</h2>
 
-    <h2>Serif — red: Charter + Noto Serif JP / blue: Nercone Serif JP</h2>
-    <div class="stack">
-      <span class="a" style="font-family: Charter, 'Noto Serif JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
-      <span class="b" style="font-family: 'Nercone Serif JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
-    </div>
+      <div class="stack">
+        <span class="a" style="font-family: Inter, 'Noto Sans JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
+        <span class="b" style="font-family: 'Nercone Sans JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
+      </div>
 
-    <h2>Mono — red: MesloLGS + Noto Sans JP / blue: Nercone Mono JP</h2>
-    <div class="stack">
-      <span class="a" style="font-family: Meslo, 'Noto Sans JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
-      <span class="b" style="font-family: 'Nercone Mono JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
-    </div>
+      <div class="stack">
+        <span class="a" style="font-family: Inter, 'Noto Sans JP'">あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら、うつくしい森で飾られたモリーオ市、郊外のぎらぎらひかる草の波。</span>
+        <span class="b" style="font-family: 'Nercone Sans JP'">あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら、うつくしい森で飾られたモリーオ市、郊外のぎらぎらひかる草の波。</span>
+      </div>
+    </section>
+
+    <section id="serif">
+      <h2>Serif — red: Charter + Noto Serif JP / blue: Nercone Serif JP</h2>
+
+      <div class="stack">
+        <span class="a" style="font-family: Charter, 'Noto Serif JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
+        <span class="b" style="font-family: 'Nercone Serif JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
+      </div>
+
+      <div class="stack">
+        <span class="a" style="font-family: Charter, 'Noto Serif JP'">あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら、うつくしい森で飾られたモリーオ市、郊外のぎらぎらひかる草の波。</span>
+        <span class="b" style="font-family: 'Nercone Serif JP'">あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら、うつくしい森で飾られたモリーオ市、郊外のぎらぎらひかる草の波。</span>
+      </div>
+    </section>
+
+    <section id="mono">
+      <h2>Mono — red: MesloLGS + Noto Sans JP / blue: Nercone Mono JP</h2>
+
+      <div class="stack">
+        <span class="a" style="font-family: MesloLGS, 'Noto Sans JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
+        <span class="b" style="font-family: 'Nercone Mono JP'">Aa123 AVATOR あア阿、。<br>Second Line / 2行目</span>
+      </div>
+
+      <div class="stack">
+        <span class="a" style="font-family: MesloLGS, 'Noto Sans JP'">あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら、うつくしい森で飾られたモリーオ市、郊外のぎらぎらひかる草の波。</span>
+        <span class="b" style="font-family: 'Nercone Mono JP'">あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら、うつくしい森で飾られたモリーオ市、郊外のぎらぎらひかる草の波。</span>
+      </div>
+    </section>
   </body>
 </html>
