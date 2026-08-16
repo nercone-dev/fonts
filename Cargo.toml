@@ -16,7 +16,7 @@ name = "nercone_fonts"
 path = "src/lib.rs"
 
 [dependencies]
-read-fonts = "0.42"
+read-fonts = "0.43"
 write-fonts = "0.51"
 skrifa = "0.45"
 fontdrasil = "0.4"
