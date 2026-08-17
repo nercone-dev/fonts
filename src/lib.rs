@@ -8,6 +8,7 @@ pub mod prepare;
 pub mod scale;
 pub mod cff;
 pub mod ranges;
+pub mod symbols;
 pub mod statics;
 pub mod layout;
 pub mod merge;

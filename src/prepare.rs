@@ -3,14 +3,16 @@ use std::collections::BTreeSet;
 use read_fonts::{FontRead, FontRef, TableProvider};
 use write_fonts::from_obj::FromTableRef;
 use read_fonts::tables::glyf::CurvePoint;
-use write_fonts::tables::glyf::{Anchor, Glyph};
+use write_fonts::tables::glyf::{Anchor, Glyph, SimpleGlyph};
 use write_fonts::tables::gvar::{GlyphDelta, GlyphDeltas, GlyphVariations, Gvar, Tent};
 use write_fonts::types::{F2Dot14, GlyphId, Tag};
 
 use crate::design::{Axis, Mapping, Space};
-use crate::font::{tags, Font, Metric};
+use crate::font::{tags, Extent, Font, Metric};
 use crate::harfbuzz;
+use crate::ranges::Private;
 use crate::scale::Scaler;
+use crate::symbols::{Cell, Symbols};
 
 pub fn features(extra: &[&str], without: &[&str]) -> Vec<String> {
     let mut found: BTreeSet<&str> = Features::default.iter().copied().collect();
@@ -87,6 +89,14 @@ impl Component {
 
     pub fn load(data: &[u8], name: &str, features: Option<Vec<String>>) -> Component {
         Component::new(Font::new(data), name, None, features)
+    }
+
+    pub fn private(&self) -> BTreeSet<u32> {
+        Private::of(&self.codepoints)
+    }
+
+    pub fn exclude(&mut self, codepoints: &BTreeSet<u32>) {
+        self.codepoints = self.codepoints.difference(codepoints).copied().collect();
     }
 
     pub fn prepare(&mut self, axis: &Axis, upem: u16, scale: f64, retain: bool) -> &mut Component {
@@ -373,6 +383,91 @@ impl Component {
         self.font.set_metrics(tags::HHEA, tags::HMTX, &adjusted);
 
         self.freeze();
+    }
+
+    pub fn fit(&mut self, into: &Cell) {
+        let upem = self.font.upem() as f64;
+        let cmap = self.cmap();
+        let placements = Symbols::placements(&cmap);
+        let count = self.font.glyph_count();
+
+        let data = self.font.data();
+        let reference = FontRef::new(&data).expect("failed to parse font");
+        let glyf = reference.glyf().expect("missing glyf");
+        let loca = reference.loca(None).expect("missing loca");
+
+        let mut outlines: Vec<Option<SimpleGlyph>> = Vec::with_capacity(count);
+        let mut bounds: Vec<Option<Extent>> = Vec::with_capacity(count);
+        for index in 0..count {
+            let parsed = loca.get_glyf(GlyphId::new(index as u32), &glyf).expect("failed to parse glyph");
+            let simple = match parsed.as_ref().map(Glyph::from_table_ref) {
+                Some(Glyph::Simple(simple)) => simple,
+                _ => {
+                    outlines.push(None);
+                    bounds.push(None);
+                    continue;
+                }
+            };
+
+            let mut extent = Extent::new();
+            for contour in simple.contours.iter() {
+                extent.contour(contour.iter());
+            }
+            outlines.push(Some(simple));
+            bounds.push(if extent.any { Some(extent) } else { None });
+        }
+
+        let mut references: Vec<Option<Extent>> = bounds.clone();
+        let mut settled: BTreeSet<u16> = BTreeSet::new();
+        for group in Symbols::grouped(&cmap) {
+            let owned: Vec<u16> = group.into_iter().filter(|glyph| settled.insert(*glyph)).collect();
+            let mut combined = Extent::new();
+            for glyph in &owned {
+                if let Some(found) = bounds.get(*glyph as usize).and_then(|found| found.as_ref()) {
+                    combined.include(found.minimum_x as f32, found.minimum_y as f32);
+                    combined.include(found.maximum_x as f32, found.maximum_y as f32);
+                }
+            }
+            if !combined.any {
+                continue;
+            }
+            for glyph in &owned {
+                if references[*glyph as usize].is_some() {
+                    references[*glyph as usize] = Some(combined);
+                }
+            }
+        }
+
+        let round = |value: f64| value.round_ties_even() as i16;
+        let mut metrics = self.font.metrics(tags::HHEA, tags::HMTX);
+        let mut glyphs = self.font.glyphs();
+        for index in 0..count {
+            let Some(mut simple) = outlines[index].take() else {
+                continue;
+            };
+            let (Some(own), Some(reference), Some(placement)) = (&bounds[index], &references[index], placements.get(&(index as u16))) else {
+                continue;
+            };
+
+            let (horizontal, vertical) = placement.scale(into, upem, reference);
+            let (dx, dy) = placement.offset(into, upem, reference, (horizontal, vertical));
+            for contour in simple.contours.iter_mut() {
+                let moved: Vec<CurvePoint> = contour
+                    .iter()
+                    .map(|point| CurvePoint::new(round(point.x as f64 * horizontal + dx), round(point.y as f64 * vertical + dy), point.on_curve))
+                    .collect();
+                *contour = moved.into();
+            }
+            simple.bbox.x_min = round(own.minimum_x * horizontal + dx);
+            simple.bbox.x_max = round(own.maximum_x * horizontal + dx);
+            simple.bbox.y_min = round(own.minimum_y * vertical + dy);
+            simple.bbox.y_max = round(own.maximum_y * vertical + dy);
+            metrics[index].bearing = simple.bbox.x_min;
+            glyphs[index] = write_fonts::dump_table(&Glyph::Simple(simple)).expect("failed to serialize glyph");
+        }
+
+        self.font.set_glyphs(&glyphs);
+        self.font.set_metrics(tags::HHEA, tags::HMTX, &metrics);
     }
 
     pub fn freeze(&mut self) {

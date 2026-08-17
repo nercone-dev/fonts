@@ -151,6 +151,22 @@ impl Font {
         found
     }
 
+    pub fn advance(&self) -> u16 {
+        let metrics = self.metrics(Tag::new(b"hhea"), Tag::new(b"hmtx"));
+        let mut counts: BTreeMap<u16, (usize, usize)> = BTreeMap::new();
+        for (index, metric) in metrics.iter().enumerate() {
+            if metric.advance > 0 {
+                let entry = counts.entry(metric.advance).or_insert((0, index));
+                entry.0 += 1;
+            }
+        }
+        counts
+            .iter()
+            .max_by(|a, b| a.1 .0.cmp(&b.1 .0).then(b.1 .1.cmp(&a.1 .1)))
+            .map(|(advance, _)| *advance)
+            .expect("no advance widths")
+    }
+
     pub fn set_metrics(&mut self, header: Tag, table: Tag, metrics: &[Metric]) {
         let mut last = metrics.len();
         if last > 1 {
@@ -412,6 +428,7 @@ pub fn charmap(mapping: &BTreeMap<u32, u16>) -> Vec<u8> {
     table
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Extent {
     pub minimum_x: f64,
     pub minimum_y: f64,
@@ -454,6 +471,56 @@ impl Extent {
         self.minimum_y = self.minimum_y.min(y as f64);
         self.maximum_x = self.maximum_x.max(x as f64);
         self.maximum_y = self.maximum_y.max(y as f64);
+    }
+
+    pub fn curve(&mut self, from: kurbo::Point, control: kurbo::Point, to: kurbo::Point) {
+        use kurbo::ParamCurveExtrema;
+        let bounds = kurbo::QuadBez::new(from, control, to).bounding_box();
+        self.include(bounds.x0 as f32, bounds.y0 as f32);
+        self.include(bounds.x1 as f32, bounds.y1 as f32);
+    }
+
+    pub fn contour<'a>(&mut self, points: impl Iterator<Item = &'a read_fonts::tables::glyf::CurvePoint>) {
+        let points: Vec<read_fonts::tables::glyf::CurvePoint> = points.copied().collect();
+        let count = points.len();
+        if count == 0 {
+            return;
+        }
+
+        let at = |index: usize| points[index % count];
+        let place = |point: read_fonts::tables::glyf::CurvePoint| kurbo::Point::new(point.x as f64, point.y as f64);
+        let middle = |first: kurbo::Point, second: kurbo::Point| first.midpoint(second);
+
+        let (origin, first) = match (0..count).find(|index| points[*index].on_curve) {
+            Some(index) => (place(at(index)), index + 1),
+            None => (middle(place(at(count - 1)), place(at(0))), 0),
+        };
+
+        self.include(origin.x as f32, origin.y as f32);
+        let mut current = origin;
+        let mut control: Option<kurbo::Point> = None;
+        for offset in 0..count {
+            let point = at(first + offset);
+            let position = place(point);
+            if point.on_curve {
+                match control.take() {
+                    Some(found) => self.curve(current, found, position),
+                    None => self.include(position.x as f32, position.y as f32),
+                }
+                current = position;
+            } else {
+                if let Some(found) = control {
+                    let implied = middle(found, position);
+                    self.curve(current, found, implied);
+                    current = implied;
+                }
+                control = Some(position);
+            }
+        }
+
+        if let Some(found) = control {
+            self.curve(current, found, origin);
+        }
     }
 }
 

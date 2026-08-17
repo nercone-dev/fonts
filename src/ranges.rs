@@ -132,6 +132,21 @@ pub const UNICODE_RANGES: [(u32, u32, u32); 169] = [
     (0x1F030, 0x1F09F, 122), (0x1F000, 0x1F02F, 122),
 ];
 
+pub struct Private;
+
+#[allow(non_upper_case_globals)]
+impl Private {
+    pub const areas: [(u32, u32); 3] = [(0xE000, 0xF8FF), (0xF0000, 0xFFFFD), (0x100000, 0x10FFFD)];
+
+    pub fn holds(codepoint: u32) -> bool {
+        Private::areas.iter().any(|(low, high)| *low <= codepoint && codepoint <= *high)
+    }
+
+    pub fn of(codepoints: &BTreeSet<u32>) -> BTreeSet<u32> {
+        codepoints.iter().copied().filter(|codepoint| Private::holds(*codepoint)).collect()
+    }
+}
+
 pub fn unicode_ranges(codepoints: &BTreeSet<u32>) -> [u32; 4] {
     let mut ranges = UNICODE_RANGES;
     ranges.sort();
@@ -388,6 +403,23 @@ mod tests {
 
     pub fn codepoints(font: &Font) -> BTreeSet<u32> {
         font.cmap().keys().copied().collect()
+    }
+
+    #[test]
+    fn private_use_areas_follow_the_unicode_standard() {
+        for codepoint in [0xE000, 0xE0B0, 0xF8FF, 0xF0000, 0xFFFFD, 0x100000, 0x10FFFD] {
+            assert!(Private::holds(codepoint), "U+{:04X} is a private use codepoint", codepoint);
+        }
+        for codepoint in [0x41, 0x2665, 0xDFFF, 0xF900, 0xEFFFF, 0xFFFFE, 0x10FFFE] {
+            assert!(!Private::holds(codepoint), "U+{:04X} is not a private use codepoint", codepoint);
+        }
+    }
+
+    #[test]
+    fn private_keeps_only_private_use_codepoints() {
+        let codepoints: BTreeSet<u32> = [0x41, 0x2665, 0xE000, 0xE0B0, 0xF8FF, 0xF900, 0xF0000, 0x10FFFE].into_iter().collect();
+        let found: BTreeSet<u32> = [0xE000, 0xE0B0, 0xF8FF, 0xF0000].into_iter().collect();
+        assert_eq!(Private::of(&codepoints), found);
     }
 
     #[test]

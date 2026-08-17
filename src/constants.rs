@@ -1,7 +1,7 @@
 use crate::models::{Weight, Slope, License, Source, Typeface, Family};
 
 #[allow(non_upper_case_globals)]
-pub const version: &str = "3.2";
+pub const version: &str = "4.0";
 #[allow(non_upper_case_globals)]
 pub const vendor: &str = "Nercone";
 
@@ -93,11 +93,12 @@ impl Sources {
         }
     }
 
-    pub fn nerd_fonts() -> Typeface {
+    pub fn nerd_fonts(monospace: bool) -> Typeface {
+        let filename = if monospace { "SymbolsNerdFontMono-Regular.ttf" } else { "SymbolsNerdFont-Regular.ttf" };
         Typeface {
             name: "Nerd Fonts".to_string(),
             sources: vec![
-                Source { path: "build/sources/nerd-fonts/SymbolsNerdFontMono-Regular.ttf".to_string(), url: URLs::nerd_fonts.to_string(), member: Some("SymbolsNerdFontMono-Regular.ttf".to_string()), slope: Slope::Upright, weight: None },
+                Source { path: format!("build/sources/nerd-fonts/{}", filename), url: URLs::nerd_fonts.to_string(), member: Some(filename.to_string()), slope: Slope::Upright, weight: None },
             ],
             prefix: "nf.".to_string(),
         }
@@ -132,28 +133,28 @@ pub fn regional(typefaces: Vec<Typeface>, region: &str) -> Vec<Typeface> {
     typefaces.into_iter().filter(|typeface| typeface.name.ends_with(region)).collect()
 }
 
-pub fn sans(region: &str) -> Family {
+pub fn sans(region: &str, nerd_fonts: bool) -> Family {
     Family {
-        name: format!("Nercone Sans {}", region),
-        filename: format!("NerconeSans{}", region),
+        name: format!("Nercone Sans {}{}", region, if nerd_fonts { " NF" } else { "" }),
+        filename: format!("NerconeSans{}{}", region, if nerd_fonts { "NF" } else { "" }),
         license: Licenses::SIL_OFL_1_1,
         latin: Sources::inter(),
         cjk: regional(Sources::noto_sans(), region),
-        symbols: None,
+        symbols: if nerd_fonts { Some(Sources::nerd_fonts(false)) } else { None },
         typeface: "Sans".to_string(),
         region: region.to_string(),
         monospace: false,
     }
 }
 
-pub fn serif(region: &str) -> Family {
+pub fn serif(region: &str, nerd_fonts: bool) -> Family {
     Family {
-        name: format!("Nercone Serif {}", region),
-        filename: format!("NerconeSerif{}", region),
+        name: format!("Nercone Serif {}{}", region, if nerd_fonts { " NF" } else { "" }),
+        filename: format!("NerconeSerif{}{}", region, if nerd_fonts { "NF" } else { "" }),
         license: Licenses::SIL_OFL_1_1,
         latin: Sources::charter(),
         cjk: regional(Sources::noto_serif(), region),
-        symbols: None,
+        symbols: if nerd_fonts { Some(Sources::nerd_fonts(false)) } else { None },
         typeface: "Serif".to_string(),
         region: region.to_string(),
         monospace: false,
@@ -167,7 +168,7 @@ pub fn mono(region: &str, nerd_fonts: bool) -> Family {
         license: Licenses::SIL_OFL_1_1,
         latin: Sources::meslo(),
         cjk: regional(Sources::noto_sans(), region),
-        symbols: if nerd_fonts { Some(Sources::nerd_fonts()) } else { None },
+        symbols: if nerd_fonts { Some(Sources::nerd_fonts(true)) } else { None },
         typeface: "Mono".to_string(),
         region: region.to_string(),
         monospace: true,
@@ -178,11 +179,15 @@ pub struct Families;
 
 impl Families {
     pub fn sans() -> Vec<Family> {
-        regions.iter().map(|region| sans(region)).collect()
+        regions.iter().map(|region| sans(region, false))
+            .chain(regions.iter().map(|region| sans(region, true)))
+            .collect()
     }
 
     pub fn serif() -> Vec<Family> {
-        regions.iter().map(|region| serif(region)).collect()
+        regions.iter().map(|region| serif(region, false))
+            .chain(regions.iter().map(|region| serif(region, true)))
+            .collect()
     }
 
     pub fn mono() -> Vec<Family> {

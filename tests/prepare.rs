@@ -1,5 +1,7 @@
 mod common;
 
+use std::collections::BTreeSet;
+
 use write_fonts::types::Tag;
 
 use nercone_fonts::design::Axis;
@@ -69,4 +71,21 @@ fn test_monospace_centers_outlines_without_scaling_them() {
 
     let shifted: Vec<(i16, i16)> = before.iter().map(|(x, y)| (*x + 50, *y)).collect();
     assert_eq!(after, shifted);
+}
+
+#[test]
+fn test_private_lists_only_private_use_codepoints() {
+    let font = build_font(&[(0x41, "A"), (0x2665, "heart"), (0xE0B0, "separator"), (0xF8FF, "logo")], &Specimen::new());
+    let component = Component::new(font, "Symbols", None, None);
+    let found: BTreeSet<u32> = [0xE0B0, 0xF8FF].into_iter().collect();
+    assert_eq!(component.private(), found, "only the private use area is a component's own");
+}
+
+#[test]
+fn test_exclude_gives_up_the_wanted_codepoints() {
+    let font = build_font(&[(0x41, "A"), (0x2665, "heart"), (0xE0B0, "separator")], &Specimen::new());
+    let mut component = Component::new(font, "Latin", None, None);
+    component.exclude(&[0x2665, 0xE0B0, 0x56].into_iter().collect());
+    assert_eq!(component.codepoints, [0x41].into_iter().collect::<BTreeSet<u32>>(), "excluded codepoints are conceded");
+    assert!(component.cmap().contains_key(&0xE0B0), "excluding a codepoint leaves the font alone until it is subset");
 }

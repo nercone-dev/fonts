@@ -21,6 +21,7 @@ use crate::naming::{Names, Notice};
 use crate::outlines::Outlines;
 use crate::prepare::{Component, Features};
 use crate::statics;
+use crate::symbols::Cell;
 
 #[allow(non_upper_case_globals)]
 pub const emphasis: f64 = 600.0;
@@ -130,6 +131,11 @@ impl Builder {
 
         let mut base = self.component(&family.latin, slope, Weight::Regular);
         let upem = base.font.upem();
+
+        let symbols = family.symbols.as_ref().map(|typeface| self.component(typeface, slope, Weight::Regular));
+        let reserved = symbols.as_ref().map(Component::private).unwrap_or_default();
+
+        base.exclude(&reserved);
         base.subset();
         base.rebase(&self.axis, true);
         base.scale(upem, 1.0);
@@ -145,7 +151,8 @@ impl Builder {
 
         for typeface in &family.cjk {
             let mut component = self.component(typeface, slope, Weight::Regular);
-            component.codepoints = component.codepoints.difference(&claimed).copied().collect();
+            component.exclude(&claimed);
+            component.exclude(&reserved);
             component.prepare(&self.axis, upem, 1.0, false);
             if let Some(advance) = advance {
                 component.monospace(advance);
@@ -157,13 +164,16 @@ impl Builder {
             addons.push(component);
         }
 
-        if let Some(symbols) = &family.symbols {
-            let mut component = self.component(symbols, slope, Weight::Regular);
-            component.codepoints = component.codepoints.difference(&claimed).copied().collect();
-            let ratio = self.ratio(&component, upem, advance);
+        if let Some(mut component) = symbols {
+            component.exclude(&claimed);
+            let cell = advance.map(|advance| Cell::of(&base.font, advance));
+            let ratio = cell.map(|cell| cell.ratio(&Cell::of(&component.font, component.font.advance()))).unwrap_or(1.0);
             component.prepare(&self.axis, upem, ratio, false);
             if let Some(advance) = advance {
                 component.monospace(advance);
+            }
+            if let Some(cell) = cell {
+                component.fit(&cell);
             }
             claimed.extend(component.codepoints.iter().copied());
             addons.push(component);
@@ -172,6 +182,7 @@ impl Builder {
         let mut bold_cmaps: Option<(BTreeMap<u32, u16>, usize)> = None;
         if !family.latin.variable() {
             let mut bold = self.component(&family.latin, slope, Weight::Bold);
+            bold.exclude(&reserved);
             bold.prepare(&self.axis, upem, 1.0, false);
             if let Some(advance) = advance {
                 bold.monospace(advance);
@@ -279,31 +290,7 @@ impl Builder {
     }
 
     pub fn cell(&self, base: &Component) -> u16 {
-        Builder::common(&base.font)
-    }
-
-    pub fn common(font: &Font) -> u16 {
-        let metrics = font.metrics(tags::HHEA, tags::HMTX);
-        let mut counts: BTreeMap<u16, (usize, usize)> = BTreeMap::new();
-        for (index, metric) in metrics.iter().enumerate() {
-            if metric.advance > 0 {
-                let entry = counts.entry(metric.advance).or_insert((0, index));
-                entry.0 += 1;
-            }
-        }
-        counts
-            .iter()
-            .max_by(|a, b| a.1 .0.cmp(&b.1 .0).then(b.1 .1.cmp(&a.1 .1)))
-            .map(|(advance, _)| *advance)
-            .expect("no advance widths")
-    }
-
-    pub fn ratio(&self, component: &Component, upem: u16, advance: Option<u16>) -> f64 {
-        let Some(advance) = advance else {
-            return 1.0;
-        };
-        let common = Builder::common(&component.font);
-        advance as f64 * component.font.upem() as f64 / (common as f64 * upem as f64)
+        base.font.advance()
     }
 
     pub fn emphasise(&self, font: &mut Font, space: &Space, substitutions: &BTreeMap<u16, u16>) {

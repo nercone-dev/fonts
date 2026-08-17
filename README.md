@@ -8,8 +8,19 @@ InterとNoto Sans JP/SC/TC/KRの合成フォントです。
 
 SIL Open Font License Version 1.1 ライセンスの元で自由に使用できます。
 
+## Nercone Sans CJK/JP/SC/TC/KR NF
+Nercone Sans CJK/JP/SC/TC/KRにNerd Fontsのパッチを適用したものです。
+私用領域はNerd Fontsのシンボルが占有するため、Interが私用領域に割り当てている異体字はOpenType機能から使用する必要があります。
+
+SIL Open Font License Version 1.1 ライセンスの元で自由に使用できます。
+
 ## Nercone Serif CJK/JP/SC/TC/KR
 CharterとNoto Serif JP/SC/TC/KRの合成フォントです。
+
+SIL Open Font License Version 1.1 ライセンスの元で自由に使用できます。
+
+## Nercone Serif CJK/JP/SC/TC/KR NF
+Nercone Serif CJK/JP/SC/TC/KRにNerd Fontsのパッチを適用したものです。
 
 SIL Open Font License Version 1.1 ライセンスの元で自由に使用できます。
 
