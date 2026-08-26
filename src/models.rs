@@ -143,6 +143,31 @@ impl Style {
         format!("{}{}", weight, self.slope.suffix())
     }
 
+    pub fn label(self) -> String {
+        let weight = self.weight.unwrap_or(Weight::Regular);
+        match (weight, self.italic()) {
+            (Weight::Regular, true) => "Italic".to_string(),
+            (weight, true) => format!("{} Italic", weight.name()),
+            (weight, false) => weight.name().to_string(),
+        }
+    }
+
+    pub fn ribbi(self) -> String {
+        match (self.bold(), self.italic()) {
+            (false, false) => "Regular".to_string(),
+            (false, true) => "Italic".to_string(),
+            (true, false) => "Bold".to_string(),
+            (true, true) => "Bold Italic".to_string(),
+        }
+    }
+
+    pub fn distinction(self) -> Option<&'static str> {
+        match self.weight {
+            None | Some(Weight::Regular) | Some(Weight::Bold) => None,
+            Some(weight) => Some(weight.name()),
+        }
+    }
+
     pub fn italic(self) -> bool {
         self.slope.italic()
     }

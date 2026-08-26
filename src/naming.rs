@@ -6,7 +6,8 @@ use write_fonts::tables::name::{Name, NameRecord};
 use write_fonts::tables::stat::{AxisRecord, AxisValue, AxisValueFormat1, AxisValueFormat3, AxisValueTableFlags, Stat};
 use write_fonts::types::{Fixed, NameId, Tag};
 
-use crate::design::Axis;
+use crate::constants::vendor_id;
+use crate::design::{epsilon, Axis};
 use crate::font::{tags, Font};
 use crate::models::{Family, Style, Weight};
 
@@ -43,32 +44,75 @@ impl<'a> Names<'a> {
     pub const DESCRIPTION: u16 = 10;
     pub const LICENSE: u16 = 13;
     pub const LICENSE_URL: u16 = 14;
+    pub const TYPOGRAPHIC_FAMILY: u16 = 16;
+    pub const TYPOGRAPHIC_VARIANT: u16 = 17;
+    pub const VARIATIONS: u16 = 25;
 
     pub fn new(subject: &'a Family, style: &'a Style, axis: &'a Axis, release: &'a str, notice: &'a str) -> Names<'a> {
         Names { subject, style, axis, release, notice }
+    }
+
+    pub fn typographic(&self) -> String {
+        match self.style.variable() {
+            true => format!("{} Variable", self.subject.name),
+            false => self.subject.name.clone(),
+        }
+    }
+
+    pub fn family(&self) -> String {
+        match self.style.distinction() {
+            None => self.typographic(),
+            Some(weight) => format!("{} {}", self.typographic(), weight),
+        }
+    }
+
+    pub fn postscript(&self) -> String {
+        format!("{}-{}", self.subject.filename, self.style.name())
+    }
+
+    pub fn prefix(&self) -> String {
+        format!("{}{}", self.subject.filename, self.style.name())
     }
 
     pub fn records(&self) -> BTreeMap<u16, String> {
         let family = self.subject;
         let style = self.style;
 
+        let typographic = self.typographic();
+        let name = self.family();
+        let variant = style.ribbi();
+        let postscript = self.postscript();
+
         let mut found = BTreeMap::new();
         found.insert(Names::COPYRIGHT, self.notice.to_string());
-        found.insert(Names::FAMILY, family.name.clone());
-        found.insert(Names::VARIANT, style.name());
-        found.insert(Names::IDENTIFIER, family.filename.clone());
-        found.insert(Names::FULL, format!("{} {}", family.name, style.name()));
+        found.insert(Names::FAMILY, name.clone());
+        found.insert(Names::VARIANT, variant.clone());
+        found.insert(Names::IDENTIFIER, format!("{};{};{}", self.release, vendor_id, postscript));
+        found.insert(Names::FULL, match style.bold() || style.italic() {
+            false => name.clone(),
+            true => format!("{} {}", name, variant),
+        });
         found.insert(Names::VERSION, format!("Version {}", self.release));
-        found.insert(Names::POSTSCRIPT, format!("{}-{}", family.filename, style.name()));
+        found.insert(Names::POSTSCRIPT, postscript);
         found.insert(Names::DESCRIPTION, family.description());
         found.insert(Names::LICENSE, family.license.name.to_string());
         found.insert(Names::LICENSE_URL, family.license.url.to_string());
+
+        if name != typographic || style.label() != variant {
+            found.insert(Names::TYPOGRAPHIC_FAMILY, typographic);
+            found.insert(Names::TYPOGRAPHIC_VARIANT, style.label());
+        }
         found
     }
 
     pub fn apply(&self, font: &mut Font) {
+        let mut found = self.records();
+        if font.contains(tags::FVAR) {
+            found.insert(Names::VARIATIONS, self.prefix());
+        }
+
         let mut records = Vec::new();
-        for (identifier, value) in self.records() {
+        for (identifier, value) in found {
             if !value.is_empty() {
                 records.push(NameRecord::new(windows.0, windows.1, windows.2, NameId::new(identifier), OffsetMarker::new(value)));
             }
@@ -114,9 +158,11 @@ impl<'a> Names<'a> {
             entry.axis_name_id = Names::add(table, &title(entry.axis_tag));
         }
 
+        let prefix = self.prefix();
         arrays.instances.clear();
-        if entries.iter().any(|(tag, _)| *tag == Axis::tag()) {
+        if let Some((_, origin)) = entries.iter().find(|(tag, _)| *tag == Axis::tag()) {
             for weight in self.axis.weights() {
+                let style = Style { weight: Some(weight), slope: self.style.slope };
                 let coordinates: Vec<Fixed> = entries
                     .iter()
                     .map(|(tag, default)| {
@@ -128,11 +174,17 @@ impl<'a> Names<'a> {
                     })
                     .collect();
 
+                let subfamily = Names::add(table, &style.label());
+                let postscript = match (weight.value() as f64 - origin).abs() < epsilon {
+                    true => NameId::new(Names::POSTSCRIPT),
+                    false => Names::add(table, &format!("{}-{}", prefix, weight.name())),
+                };
+
                 arrays.instances.push(InstanceRecord {
-                    subfamily_name_id: Names::add(table, &format!("{}{}", weight.name(), self.style.slope.suffix())),
+                    subfamily_name_id: subfamily,
                     flags: 0,
                     coordinates,
-                    post_script_name_id: Some(NameId::new(0xFFFF)),
+                    post_script_name_id: Some(postscript),
                 });
             }
         }

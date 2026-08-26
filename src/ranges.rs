@@ -147,6 +147,40 @@ impl Private {
     }
 }
 
+pub struct Codepages;
+
+#[allow(non_upper_case_globals)]
+impl Codepages {
+    pub const japanese: u32 = 17;
+    pub const simplified: u32 = 18;
+    pub const wansung: u32 = 19;
+    pub const traditional: u32 = 20;
+    pub const johab: u32 = 21;
+
+    pub const cjk: [u32; 5] = [Codepages::japanese, Codepages::simplified, Codepages::wansung, Codepages::traditional, Codepages::johab];
+
+    pub fn primary(region: &str) -> u32 {
+        match region {
+            "CJK" | "JP" => Codepages::japanese,
+            "SC" => Codepages::simplified,
+            "TC" => Codepages::traditional,
+            "KR" => Codepages::wansung,
+            _ => panic!("unsupported region: {}", region),
+        }
+    }
+
+    pub fn restrict(ranges: [u32; 2], region: &str) -> [u32; 2] {
+        let primary = Codepages::primary(region);
+        let mut words = ranges;
+        for bit in Codepages::cjk {
+            if bit != primary {
+                words[(bit / 32) as usize] &= !(1 << (bit % 32));
+            }
+        }
+        words
+    }
+}
+
 pub fn unicode_ranges(codepoints: &BTreeSet<u32>) -> [u32; 4] {
     let mut ranges = UNICODE_RANGES;
     ranges.sort();
@@ -420,6 +454,43 @@ mod tests {
         let codepoints: BTreeSet<u32> = [0x41, 0x2665, 0xE000, 0xE0B0, 0xF8FF, 0xF900, 0xF0000, 0x10FFFE].into_iter().collect();
         let found: BTreeSet<u32> = [0xE000, 0xE0B0, 0xF8FF, 0xF0000].into_iter().collect();
         assert_eq!(Private::of(&codepoints), found);
+    }
+
+    #[test]
+    fn every_region_claims_a_single_east_asian_codepage() {
+        let east: u32 = Codepages::cjk.iter().map(|bit| 1u32 << bit).sum();
+        for (region, wanted) in [("CJK", Codepages::japanese), ("JP", Codepages::japanese), ("SC", Codepages::simplified), ("TC", Codepages::traditional), ("KR", Codepages::wansung)] {
+            let found = Codepages::restrict([east | 0x0000019F, 0xFFFFFFFF], region);
+            assert_eq!(found[0] & east, 1u32 << wanted, "{}", region);
+            assert_eq!(found[0] & !east, 0x0000019F, "{}", region);
+            assert_eq!(found[1], 0xFFFFFFFF, "{}", region);
+        }
+    }
+
+    #[test]
+    fn no_region_claims_a_codepage_the_font_does_not_carry() {
+        for region in ["CJK", "JP", "SC", "TC", "KR"] {
+            assert_eq!(Codepages::restrict([0, 0], region), [0, 0], "{}", region);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported region")]
+    fn an_unknown_region_is_rejected() {
+        Codepages::restrict([0, 0], "Latin");
+    }
+
+    #[test]
+    fn a_pan_east_asian_font_keeps_only_the_codepage_of_its_region() {
+        let font = load("build/sources/noto/NotoSansJP.ttf");
+        let codepoints = codepoints(&font);
+        let ranges = codepage_ranges(&codepoints);
+
+        for (region, wanted) in [("CJK", Codepages::japanese), ("JP", Codepages::japanese), ("SC", Codepages::simplified), ("TC", Codepages::traditional), ("KR", Codepages::wansung)] {
+            let found = Codepages::restrict(ranges, region);
+            let bits: Vec<u32> = Codepages::cjk.into_iter().filter(|bit| (found[0] >> bit) & 1 == 1).collect();
+            assert_eq!(bits, vec![wanted], "{}", region);
+        }
     }
 
     #[test]

@@ -4,6 +4,8 @@ use crate::models::{Weight, Slope, License, Source, Typeface, Family};
 pub const version: &str = "4.0";
 #[allow(non_upper_case_globals)]
 pub const vendor: &str = "Nercone";
+#[allow(non_upper_case_globals)]
+pub const vendor_id: &str = "NRCN";
 
 pub struct Paths;
 

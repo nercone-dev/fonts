@@ -3,6 +3,7 @@ use write_fonts::tables::gasp::{Gasp, GaspRange, GaspRangeBehavior};
 use write_fonts::tables::os2::SelectionFlags;
 use write_fonts::types::{Fixed, Tag};
 
+use crate::constants::vendor_id;
 use crate::font::{tags, Font};
 use crate::models::{Family, Style};
 use crate::prepare::Component;
@@ -156,7 +157,7 @@ impl Metrics {
         os2.panose_10[1] = if family.typeface == "Serif" { 2 } else { 11 };
         os2.panose_10[3] = if family.monospace { 9 } else { 3 };
 
-        os2.ach_vend_id = Tag::new(b"NRCN");
+        os2.ach_vend_id = Tag::new_checked(vendor_id.as_bytes()).expect("vendor identifier is a tag");
         os2.us_default_char = Some(0);
         os2.us_break_char = Some(32);
         os2.us_max_context = Some(ranges::max_context(font));
@@ -167,7 +168,7 @@ impl Metrics {
         os2.ul_unicode_range_2 = unicode[1];
         os2.ul_unicode_range_3 = unicode[2];
         os2.ul_unicode_range_4 = unicode[3];
-        let codepages = ranges::codepage_ranges(&codepoints);
+        let codepages = ranges::Codepages::restrict(ranges::codepage_ranges(&codepoints), &family.region);
         os2.ul_code_page_range_1 = Some(codepages[0]);
         os2.ul_code_page_range_2 = Some(codepages[1]);
 
