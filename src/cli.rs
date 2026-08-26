@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use crate::build::Builder;
 use crate::constants::{version, Families, Paths};
 use crate::models::{Family, Format};
-use crate::package::{Archives, Packager};
+use crate::package::Packager;
 
 #[allow(non_upper_case_globals)]
 pub const concurrency: usize = 2;
@@ -39,10 +39,8 @@ pub enum Command {
     },
     #[command(about = "write dist/ archives from build/files")]
     Package {
-        #[arg(help = "families to act on, all of them by default")]
+        #[arg(help = "families and collections to act on, all of them by default")]
         families: Vec<String>,
-        #[arg(long, num_args = 1.., help = "archive formats to write, all of them by default")]
-        archives: Vec<String>,
     },
     #[command(about = "download, build and package")]
     All {
@@ -50,8 +48,6 @@ pub enum Command {
         families: Vec<String>,
         #[arg(long, num_args = 1.., help = "file formats to write, all of them by default")]
         formats: Vec<String>,
-        #[arg(long, num_args = 1.., help = "archive formats to write, all of them by default")]
-        archives: Vec<String>,
         #[arg(long, default_value_t = concurrency, help = "families to compose at once, each costing a few gigabytes")]
         jobs: usize,
     },
@@ -149,24 +145,27 @@ pub fn build(names: &[String], wanted: &[String], at_once: usize) -> i32 {
     0
 }
 
-pub fn package(names: &[String], wanted: &[String]) -> i32 {
-    let chosen = families(names);
-
-    let mut packagers: Vec<Packager> = chosen
-        .iter()
-        .map(|family| Packager::new(family.filename.clone(), vec![family.clone()], family.license.clone()))
-        .collect();
-
+pub fn packagers(names: &[String]) -> Vec<Packager> {
     if names.is_empty() {
-        for (name, group) in Families::collections() {
-            let license = group[0].license.clone();
-            packagers.push(Packager::new(name.clone(), group, license));
+        let mut packagers: Vec<Packager> = Families::all().into_iter().map(Packager::family).collect();
+        packagers.extend(Families::collections().into_iter().map(|(name, group)| Packager::collection(name, group)));
+        return packagers;
+    }
+
+    let mut packagers = Vec::new();
+    for name in names {
+        match Families::collection(name) {
+            Some((collection, group)) => packagers.push(Packager::collection(collection, group)),
+            None => packagers.extend(families(std::slice::from_ref(name)).into_iter().map(Packager::family)),
         }
     }
 
-    let archives: Vec<&str> = if wanted.is_empty() { Archives::all().to_vec() } else { wanted.iter().map(String::as_str).collect() };
-    packagers.par_iter().for_each(|packager| {
-        packager.package(Some(&archives));
+    packagers
+}
+
+pub fn package(names: &[String]) -> i32 {
+    packagers(names).par_iter().for_each(|packager| {
+        packager.package();
     });
 
     0
@@ -178,8 +177,8 @@ pub fn main() -> i32 {
     match &arguments.command {
         Command::Download { families } => download(families),
         Command::Build { families, formats, jobs } => build(families, formats, *jobs),
-        Command::Package { families, archives } => package(families, archives),
-        Command::All { families, formats, archives, jobs } => {
+        Command::Package { families } => package(families),
+        Command::All { families, formats, jobs } => {
             let code = download(families);
             if code != 0 {
                 return code;
@@ -188,7 +187,7 @@ pub fn main() -> i32 {
             if code != 0 {
                 return code;
             }
-            package(families, archives)
+            package(families)
         }
     }
 }

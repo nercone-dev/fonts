@@ -1,7 +1,7 @@
 use crate::models::{Weight, Slope, License, Source, Typeface, Family};
 
 #[allow(non_upper_case_globals)]
-pub const version: &str = "4.0";
+pub const version: &str = "5.0";
 #[allow(non_upper_case_globals)]
 pub const vendor: &str = "Nercone";
 #[allow(non_upper_case_globals)]
@@ -211,5 +211,10 @@ impl Families {
             ("NerconeSerif".to_string(), Families::serif()),
             ("NerconeMono".to_string(), Families::mono()),
         ]
+    }
+
+    pub fn collection(name: &str) -> Option<(String, Vec<Family>)> {
+        let wanted = name.replace(' ', "").to_lowercase();
+        Families::collections().into_iter().find(|(collection, _)| collection.to_lowercase() == wanted)
     }
 }

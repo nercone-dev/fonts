@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "アセットを添付する既存リリースのタグ"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  compile:
+    name: Compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the binary
+        run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nercone-fonts
+          path: target/release/nercone-fonts
+          retention-days: 1
+
+  families:
+    name: ${{ matrix.family }}
+    needs: compile
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        family:
+          - NerconeSansCJK
+          - NerconeSansJP
+          - NerconeSansSC
+          - NerconeSansTC
+          - NerconeSansKR
+          - NerconeSansCJKNF
+          - NerconeSansJPNF
+          - NerconeSansSCNF
+          - NerconeSansTCNF
+          - NerconeSansKRNF
+          - NerconeSerifCJK
+          - NerconeSerifJP
+          - NerconeSerifSC
+          - NerconeSerifTC
+          - NerconeSerifKR
+          - NerconeSerifCJKNF
+          - NerconeSerifJPNF
+          - NerconeSerifSCNF
+          - NerconeSerifTCNF
+          - NerconeSerifKRNF
+          - NerconeMonoCJK
+          - NerconeMonoJP
+          - NerconeMonoSC
+          - NerconeMonoTC
+          - NerconeMonoKR
+          - NerconeMonoCJKNF
+          - NerconeMonoJPNF
+          - NerconeMonoSCNF
+          - NerconeMonoTCNF
+          - NerconeMonoKRNF
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nercone-fonts
+          path: .
+
+      - name: Compose and package the family
+        run: |
+          chmod +x nercone-fonts
+          ./nercone-fonts all "${{ matrix.family }}" --jobs 1
+
+      - name: Attach the archive to the release
+        run: gh release upload "$TAG" "dist/${{ matrix.family }}.tar.xz" --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: files-${{ matrix.family }}
+          path: build/files
+          retention-days: 1
+          compression-level: 0
+
+  collections:
+    name: ${{ matrix.collection }}
+    needs: families
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        collection:
+          - NerconeSans
+          - NerconeSerif
+          - NerconeMono
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nercone-fonts
+          path: .
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: files-${{ matrix.collection }}*
+          merge-multiple: true
+          path: build/files
+
+      - name: Package the collection
+        run: |
+          chmod +x nercone-fonts
+          ./nercone-fonts package "${{ matrix.collection }}"
+
+      - name: Attach the archive to the release
+        run: gh release upload "$TAG" "dist/${{ matrix.collection }}.tar.xz" --clobber
