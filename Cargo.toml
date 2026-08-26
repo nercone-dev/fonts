@@ -24,7 +24,7 @@ kurbo = "0.12"
 kurbo13 = { package = "kurbo", version = "0.13" }
 clap = { version = "4", features = ["derive"] }
 rayon = "1"
-ureq = "2"
+ureq = "3"
 zip = "8"
 tar = "0.4"
 liblzma = { version = "0.4", features = ["static"] }
