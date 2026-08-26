@@ -20,7 +20,7 @@ read-fonts = "0.42"
 write-fonts = "0.51"
 skrifa = "0.45"
 fontdrasil = "0.4"
-kurbo = "0.12"
+kurbo = "0.13"
 kurbo13 = { package = "kurbo", version = "0.13" }
 clap = { version = "4", features = ["derive"] }
 rayon = "1"
