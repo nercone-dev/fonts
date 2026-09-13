@@ -18,7 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 read-fonts = "0.42"
 write-fonts = "0.51"
-skrifa = "0.45"
+skrifa = "0.47"
 fontdrasil = "0.4"
 kurbo = "0.12"
 kurbo13 = { package = "kurbo", version = "0.13" }
