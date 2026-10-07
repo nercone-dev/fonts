@@ -285,3 +285,53 @@ fn test_glyphs_beyond_the_capacity_of_a_font_are_refused() {
     let mut font = specimen();
     font.set_glyphs(&vec![Vec::new(); capacity + 1]);
 }
+
+pub fn rectangle(x_min: i16, y_min: i16, x_max: i16, y_max: i16) -> Vec<u8> {
+    let contour: Vec<CurvePoint> = vec![
+        CurvePoint::new(x_min, y_min, true),
+        CurvePoint::new(x_min, y_max, true),
+        CurvePoint::new(x_max, y_max, true),
+        CurvePoint::new(x_max, y_min, true),
+    ];
+    let outline = SimpleGlyph {
+        bbox: Bbox { x_min, y_min, x_max, y_max },
+        contours: vec![contour.into()],
+        instructions: Vec::new(),
+        overlaps: false,
+    };
+    write_fonts::dump_table(&Glyph::Simple(outline)).expect("failed to serialize glyph")
+}
+
+pub fn head_bounds(font: &Font) -> (i16, i16, i16, i16) {
+    let head = font.read::<read_fonts::tables::head::Head>().expect("missing head");
+    (head.x_min(), head.y_min(), head.x_max(), head.y_max())
+}
+
+#[test]
+fn test_head_bounds_ignore_outliers_beyond_the_line_box() {
+    let mut font = build_font(&[(0x41, "A"), (0x42, "B")], &Specimen::new());
+    font.set_glyphs(&[rectangle(50, 0, 500, 700), rectangle(50, 0, 500, 700), rectangle(-900, -1200, 3000, 2800)]);
+    font.finalize();
+
+    assert_eq!(head_bounds(&font), (-31, -250, 1000, 1000));
+}
+
+#[test]
+fn test_head_bounds_keep_the_drawn_box_when_it_fits() {
+    let mut font = build_font(&[(0x41, "A")], &Specimen::new());
+    font.set_glyphs(&[rectangle(50, 0, 500, 700), rectangle(10, -100, 600, 800)]);
+    font.finalize();
+
+    assert_eq!(head_bounds(&font), (10, -100, 600, 800));
+}
+
+#[test]
+fn test_line_extent_takes_the_widest_of_hhea_and_typographic_values() {
+    let font = build_font(&[(0x41, "A")], &Specimen::new());
+    assert_eq!(font.line_extent(), (-250.0, 1000.0));
+
+    let mut specimen = Specimen::new();
+    specimen.typo = (1200, -400, 0);
+    let font = build_font(&[(0x41, "A")], &specimen);
+    assert_eq!(font.line_extent(), (-400.0, 1200.0));
+}

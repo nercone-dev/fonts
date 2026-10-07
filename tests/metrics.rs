@@ -1,6 +1,6 @@
 mod common;
 
-use nercone_fonts::metrics::Metrics;
+use nercone_fonts::metrics::{advertised_bounds, Metrics};
 use nercone_fonts::models::{Family, License, Slope, Style, Typeface, Weight};
 use nercone_fonts::prepare::Component;
 
@@ -105,4 +105,28 @@ fn test_every_line_height_convention_agrees_with_base() {
     assert_eq!(line, 1216);
     assert_eq!(typographic, 1216);
     assert_eq!(window, 1216);
+}
+
+#[test]
+fn test_advertised_bounds_are_limited_to_the_line_box() {
+    let drawn = [-2052.0, -2146.0, 5997.0, 3703.0];
+    let bounds = advertised_bounds(drawn, 2048.0, -494.0, 1984.0);
+    assert_eq!(bounds, [-64.0, -494.0, 2048.0, 1984.0]);
+}
+
+#[test]
+fn test_advertised_bounds_keep_a_box_that_already_fits() {
+    let drawn = [31.0, -163.0, 1900.0, 1711.0];
+    assert_eq!(advertised_bounds(drawn, 2048.0, -494.0, 1984.0), drawn);
+}
+
+#[test]
+fn test_advertised_bounds_fall_back_when_the_limit_would_invert_the_box() {
+    let drawn = [0.0, 3000.0, 900.0, 3700.0];
+    assert_eq!(advertised_bounds(drawn, 2048.0, -494.0, 1984.0), drawn);
+}
+
+#[test]
+fn test_advertised_bounds_of_an_empty_font_stay_zero() {
+    assert_eq!(advertised_bounds([0.0; 4], 1000.0, -250.0, 1000.0), [0.0; 4]);
 }

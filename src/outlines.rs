@@ -335,7 +335,10 @@ impl Outlines {
             italic_angle: post.italic_angle().to_f64(),
             underline_position: post.underline_position().to_i16() as f64,
             underline_thickness: post.underline_thickness().to_i16() as f64,
-            font_bbox: cff::bounds(glyphs),
+            font_bbox: {
+                let (descender, ascender) = font.line_extent();
+                crate::metrics::advertised_bounds(cff::bounds(glyphs), upem, descender, ascender)
+            },
             language_group: if family.cjk.is_empty() { 0 } else { 1 },
             upem,
             std_hw: (upem * 0.04).round_ties_even().max(1.0),

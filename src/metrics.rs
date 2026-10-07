@@ -12,6 +12,22 @@ use crate::ranges;
 #[allow(non_upper_case_globals)]
 pub const epsilon: f64 = 1e-6;
 
+#[allow(non_upper_case_globals)]
+pub const bounds_bleed: f64 = 1.0 / 32.0;
+
+pub fn advertised_bounds(drawn: [f64; 4], upem: f64, descender: f64, ascender: f64) -> [f64; 4] {
+    let limited = [
+        drawn[0].max(-upem * bounds_bleed),
+        drawn[1].max(descender),
+        drawn[2].min(upem),
+        drawn[3].min(ascender),
+    ];
+    if limited[0] > limited[2] || limited[1] > limited[3] {
+        return drawn;
+    }
+    limited
+}
+
 pub struct Metrics {
     pub upem: i32,
     pub ascender: i32,

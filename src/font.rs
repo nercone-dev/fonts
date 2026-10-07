@@ -70,6 +70,23 @@ impl Font {
         self.read::<read_fonts::tables::head::Head>().expect("missing head").units_per_em()
     }
 
+    pub fn line_extent(&self) -> (f64, f64) {
+        let word = |data: &[u8], at: usize| -> Option<f64> {
+            data.get(at..at + 2).map(|bytes| i16::from_be_bytes([bytes[0], bytes[1]]) as f64)
+        };
+
+        let (mut descender, mut ascender) = (0.0f64, 0.0f64);
+        if let Some(hhea) = self.get(tags::HHEA) {
+            ascender = ascender.max(word(hhea, 4).unwrap_or(0.0));
+            descender = descender.min(word(hhea, 6).unwrap_or(0.0));
+        }
+        if let Some(os2) = self.get(tags::OS2) {
+            ascender = ascender.max(word(os2, 68).unwrap_or(0.0));
+            descender = descender.min(word(os2, 70).unwrap_or(0.0));
+        }
+        (descender, ascender)
+    }
+
     pub fn glyph_count(&self) -> usize {
         self.read::<read_fonts::tables::maxp::Maxp>().expect("missing maxp").num_glyphs() as usize
     }
@@ -694,11 +711,14 @@ impl Font {
         limits.apply(self);
 
         let mut head = self.get(Tag::new(b"head")).expect("missing head").to_vec();
-        let bounds = if font_extent.any {
-            (font_extent.minimum_x as i16, font_extent.minimum_y as i16, font_extent.maximum_x as i16, font_extent.maximum_y as i16)
+        let drawn = if font_extent.any {
+            [font_extent.minimum_x, font_extent.minimum_y, font_extent.maximum_x, font_extent.maximum_y]
         } else {
-            (0, 0, 0, 0)
+            [0.0; 4]
         };
+        let (descender, ascender) = self.line_extent();
+        let advertised = crate::metrics::advertised_bounds(drawn, self.upem() as f64, descender, ascender);
+        let bounds = (advertised[0] as i16, advertised[1] as i16, advertised[2] as i16, advertised[3] as i16);
         head[36..38].copy_from_slice(&bounds.0.to_be_bytes());
         head[38..40].copy_from_slice(&bounds.1.to_be_bytes());
         head[40..42].copy_from_slice(&bounds.2.to_be_bytes());
